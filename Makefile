@@ -165,16 +165,40 @@ $(FF_STAMP): FORCE
 
 # Windows: compile the icon in, link as a GUI subsystem binary so a
 # double-click does not open a console behind the window, and link the
-# toolchain's own runtime statically - without it the binary imports
-# libstdc++-6.dll and friends, which live inside an MSYS2 installation and
-# nowhere else.
+# toolchain's own runtime statically - without that the binary imports
+# libstdc++-6.dll, libgcc_s_seh-1.dll and libwinpthread-1.dll, which live
+# inside an MSYS2 installation and nowhere else. It runs on the machine that
+# built it and fails to start on every machine that downloads it.
+#
+# How much else is linked statically depends on which ffmpeg was found, and
+# the two cases must not be confused:
+#
+#   vendor/ffmpeg or FFMPEG=   a static prefix, so -static: everything goes in
+#                              the executable and nothing has to be shipped
+#                              beside it. This is what release.yml builds.
+#
+#   pkg-config                 MSYS2's ffmpeg, which is DLLs. A bare -static
+#                              here makes the linker prefer MSYS2's static
+#                              libavutil.a instead - and then fail on the
+#                              hundred symbols its private dependencies would
+#                              have provided, from libva to BCryptGenRandom.
+#                              So the runtime is pinned piece by piece and
+#                              ffmpeg stays a DLL.
 ifeq ($(OS),Windows_NT)
   GUI_RES  := src/gui/bencsnip.res.o
-  GUI_LINK := -mwindows -static -static-libgcc -static-libstdc++
   # GetOpenFileName and GetSaveFileName live in comdlg32. raylib brings in
   # gdi32, winmm and opengl32 and nothing else, so without this the link fails
   # on two symbols and nowhere says which library they belong to.
   WIN_LIBS := -lcomdlg32
+  ifeq ($(FF_FROM),pkg-config)
+    GUI_LINK := -mwindows -static-libgcc -static-libstdc++
+    # std::thread is winpthreads on this toolchain, and -static-libstdc++
+    # does not cover it. Last on the link line, because -Bstatic applies to
+    # what follows it.
+    WIN_LIBS += -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
+  else
+    GUI_LINK := -mwindows -static -static-libgcc -static-libstdc++
+  endif
 else
   GUI_RES  :=
   GUI_LINK :=
