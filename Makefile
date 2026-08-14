@@ -190,21 +190,28 @@ ifeq ($(OS),Windows_NT)
   # gdi32, winmm and opengl32 and nothing else, so without this the link fails
   # on two symbols and nowhere says which library they belong to.
   WIN_LIBS := -lcomdlg32
+  GUI_LINK := -mwindows -static -static-libgcc -static-libstdc++
+  # -static is what pins the runtime, and it has to stay in force to the end
+  # of the link line. An explicit -lwinpthread earlier does not do the job:
+  # gcc appends libstdc++.a *after* everything given here, so its pthread
+  # references come up once the static archive has already been passed and
+  # are answered by the driver's own -lwinpthread - which is the import
+  # library, and libwinpthread-1.dll ends up in the import table anyway.
+  #
+  # Against MSYS2's packaged ffmpeg, then, only ffmpeg is dynamic, and it is
+  # marked so where it appears rather than by relaxing the whole link.
   ifeq ($(FF_FROM),pkg-config)
-    GUI_LINK := -mwindows -static-libgcc -static-libstdc++
-    # std::thread is winpthreads on this toolchain, and -static-libstdc++
-    # does not cover it. Last on the link line, because -Bstatic applies to
-    # what follows it.
-    WIN_LIBS += -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
-  else
-    GUI_LINK := -mwindows -static -static-libgcc -static-libstdc++
+    FF_LINK := -Wl,-Bdynamic $(FF_LIBS) -Wl,-Bstatic
   endif
 else
   GUI_RES  :=
   GUI_LINK :=
 endif
 
-LDLIBS_GUI := $(RL_LIBS) $(RL_SYS) $(FF_LIBS) $(WIN_LIBS)
+# Everywhere but the Windows-with-packaged-ffmpeg case, this is just FF_LIBS.
+FF_LINK ?= $(FF_LIBS)
+
+LDLIBS_GUI := $(RL_LIBS) $(RL_SYS) $(FF_LINK) $(WIN_LIBS)
 
 .PHONY: all gui core test probe clean info check-deps
 
