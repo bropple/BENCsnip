@@ -1219,7 +1219,21 @@ void splashDone()
 
 static int run(int argc, char **argv)
 {
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT | FLAG_MSAA_4X_HINT);
+    /* No multisampling hint.
+     *
+     * It was here for the one curved thing on screen - S. Tarr's star - and
+     * it cost the whole of startup on Windows. Asking for a 4x multisampled
+     * pixel format makes the driver search its formats for one, and on a
+     * machine whose driver has no such format that search is where the
+     * program sat: measured on a Windows runner, InitWindow never returned at
+     * all, and on a real machine it is the ten to fifteen seconds before the
+     * window appears.
+     *
+     * Everything else here is rectangles and text, which multisampling does
+     * nothing for. The star is drawn from triangles and is slightly harder at
+     * the points without it, which is a trade worth making several times
+     * over. */
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
     SetTraceLogLevel(LOG_WARNING);
     mark("before window");
     if (g_timing) { printf("  ... asking for the window and a GL context\n"); fflush(stdout); }
