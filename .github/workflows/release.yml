@@ -133,6 +133,12 @@ jobs:
   # universal build needs a universal ffmpeg, which means building it twice
   # and lipo-ing six static libraries together. Two archives is less
   # machinery and says plainly which one to download.
+  #
+  # The Intel runner is macos-15-intel, not macos-13. macos-13 was retired,
+  # and a retired label does not fail - the job simply queues, forever. On
+  # the first release that meant four finished binaries waiting an hour on a
+  # runner that was never going to arrive, which is also why the publish job
+  # no longer insists on all five.
   # ------------------------------------------------------------------
   macos:
     name: macos ${{ matrix.arch }}
@@ -143,7 +149,7 @@ jobs:
       matrix:
         include:
           - { arch: arm64,  runner: macos-latest }
-          - { arch: x86_64, runner: macos-13 }
+          - { arch: x86_64, runner: macos-15-intel }
     steps:
       - uses: actions/checkout@v7
         with:
