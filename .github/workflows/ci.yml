@@ -9,10 +9,16 @@ name: build
 # the binaries existed and nothing could be downloaded, which is most of the
 # reason to build three platforms in the first place.
 #
-# These builds link the ffmpeg the platform's package manager ships, which is
-# the right thing here: it is fast, and it is what someone building from source
-# will have. The self-contained binaries - static ffmpeg, nothing to install -
-# are built on a tag by release.yml.
+# The Linux job links the ffmpeg the distribution ships, because that is what
+# somebody building from source has and it is the only job that proves that
+# path still works.
+#
+# macOS and Windows link the static ffmpeg instead, from the same cache
+# release.yml fills. Not for speed - it costs a minute - but because those two
+# are the ones that produce something installable, and an installer built
+# against Homebrew's dylibs or MSYS2's DLLs is an installer that works on the
+# runner and nowhere else. What comes out of a push is now the same shape as
+# what comes out of a tag, minus the version number.
 
 on:
   push:
@@ -152,12 +158,27 @@ jobs:
   macos:
     name: macos
     runs-on: macos-latest
-    timeout-minutes: 40
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
 
+      # The command-line ffmpeg, for `make testmedia`. What gets linked is the
+      # static prefix below; a vendor/ffmpeg takes precedence over pkg-config.
       - name: ffmpeg
-        run: brew install ffmpeg pkg-config
+        run: brew install ffmpeg pkg-config nasm
+
+      # The same key release.yml writes, so a push reads the cache a tag
+      # filled and neither has to build it twice.
+      - name: Cached static ffmpeg
+        id: ffcache
+        uses: actions/cache@v6
+        with:
+          path: vendor/ffmpeg
+          key: ffmpeg-${{ runner.os }}-arm64-${{ hashFiles('tools/build-ffmpeg.sh') }}
+
+      - name: Build static ffmpeg
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        run: tools/build-ffmpeg.sh --jobs 4
 
       # From source and static, not `brew install raylib`. Homebrew's is a
       # dylib under /opt/homebrew, and a binary linked against it aborts at
@@ -189,19 +210,42 @@ jobs:
       - name: It runs
         run: ./bencsnip --version
 
-      - name: Package
+      - name: It carries its own ffmpeg
         run: |
-          D="bencsnip-$(git rev-parse --short HEAD)-macos-arm64"
-          mkdir -p "$D"
-          cp bencsnip README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
-          tar czf "$D.tar.gz" "$D"
-          echo "PKG=$D.tar.gz" >> "$GITHUB_ENV"
-          ls -l "$D.tar.gz"
+          otool -L bencsnip
+          if otool -L bencsnip | grep -E 'libav|libsw|libx264|homebrew|/opt/'; then
+            echo "still needs something from Homebrew"
+            exit 1
+          fi
+          echo "self-contained"
+
+      - name: dmgbuild
+        run: |
+          python3 -m venv /tmp/dmgvenv
+          /tmp/dmgvenv/bin/pip install -q dmgbuild
+          echo "DMGBUILD=/tmp/dmgvenv/bin/dmgbuild" >> "$GITHUB_ENV"
+
+      # The same disk image a release ships, named after the commit instead of
+      # a tag. An installer nobody can install is not worth building, so this
+      # mounts it and runs what is inside.
+      - name: Bundle and image
+        run: |
+          V="$(git rev-parse --short HEAD)"
+          export SN_VERSION="0.0.0"
+          strip -x bencsnip
+          tools/macos-app.sh bencsnip BENCsnip.app
+          mkdir -p dist
+          tools/macos-dmg.sh BENCsnip.app "dist/bencsnip-$V-macos-arm64.dmg"
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/dmg "dist/bencsnip-$V-macos-arm64.dmg"
+          "/tmp/dmg/BENCsnip.app/Contents/MacOS/BENCsnip" --version
+          codesign --verify --deep --strict "/tmp/dmg/BENCsnip.app"
+          hdiutil detach /tmp/dmg
+          ls -l dist/
 
       - uses: actions/upload-artifact@v7
         with:
-          name: bencsnip-macos
-          path: ${{ env.PKG }}
+          name: bencsnip-macos-dmg
+          path: dist/*
           if-no-files-found: error
 
   windows:
@@ -220,10 +264,25 @@ jobs:
           install: >-
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-nasm
             mingw-w64-ucrt-x86_64-ffmpeg
             git
             make
             zip
+            diffutils
+
+      # The same key release.yml writes. The packaged ffmpeg above stays for
+      # `make testmedia`; what gets linked is this.
+      - name: Cached static ffmpeg
+        id: ffcache
+        uses: actions/cache@v6
+        with:
+          path: vendor/ffmpeg
+          key: ffmpeg-windows-x86_64-${{ hashFiles('tools/build-ffmpeg.sh') }}
+
+      - name: Build static ffmpeg
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        run: tools/build-ffmpeg.sh --jobs 4
 
       # raylib's own Makefile, not cmake. cmake's "MinGW Makefiles" generator
       # wants mingw32-make, a separate package from the MSYS make that is
@@ -254,52 +313,80 @@ jobs:
           make testmedia
           make test
 
-      # The compiler runtime is linked statically, so a downloaded binary does
-      # not need MSYS2's DLLs on PATH - which the person who downloaded it does
-      # not have and would have no reason to install. The import table is the
-      # only place the answer lives; grepping the Makefile cannot tell you
-      # whether the flag survived.
-      #
-      # ffmpeg's own DLLs are a different matter and are expected here: this
-      # job links the packaged ffmpeg on purpose. release.yml builds the static
-      # one and checks that none of these remain.
-      - name: No MSYS2 compiler-runtime DLLs
+      # The import table is the only place the answer lives; grepping the
+      # Makefile cannot tell you whether the flags survived. Anything from
+      # MSYS2 here - the compiler runtime, ffmpeg, raylib - means an executable
+      # that starts on this runner and nowhere else.
+      - name: Nothing from MSYS2 in the import table
         run: |
-          if objdump -p bencsnip.exe | grep -iE 'DLL Name:.*(libgcc|libwinpthread|libstdc|msys-)'; then
-            echo "links a runtime DLL that will not be present on a user's machine"
+          objdump -p bencsnip.exe | grep 'DLL Name'
+          if objdump -p bencsnip.exe | grep -iE 'DLL Name:.*(libgcc|libwinpthread|libstdc|msys-|avcodec|avformat|avutil|swscale|swresample|raylib|x264)'; then
+            echo "links a DLL that will not be present on a user's machine"
             exit 1
           fi
-          echo "self-contained, apart from ffmpeg"
+          echo "self-contained"
 
-      # Zipped here rather than left to upload-artifact so the archive has one
-      # named folder at its root instead of loose files, and so the name says
-      # which commit it came from. Windows has no executable bit to lose, so
-      # the zip is not the hazard it is on the other two platforms.
-      #
-      # The MSYS2 DLLs travel with it, because this build needs them - and
-      # every DLL, not just ffmpeg's five: libavcodec alone pulls in x264,
-      # vpx, opus, dav1d and a dozen more, and a zip holding avcodec without
-      # them is a zip that does not start. `ldd` resolves the whole tree,
-      # which is why it is used here rather than reading the import table.
-      #
-      # The release build has none of this: it links a static ffmpeg and the
-      # archive is one file.
+      # One executable and the paperwork, which is what tools/package.sh
+      # assembles for a release - used here too so a push and a tag cannot
+      # disagree about what goes in the box.
       - name: Package
-        run: |
-          D="bencsnip-$(git rev-parse --short HEAD)-windows-x86_64"
-          mkdir -p "$D"
-          cp bencsnip.exe README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
-          ldd bencsnip.exe | awk '/ucrt64/ {print $3}' | sort -u | while read -r dll; do
-            cp "$dll" "$D"/
-          done
-          ls "$D" | head -40
-          echo "$(ls "$D"/*.dll 2>/dev/null | wc -l) DLLs alongside it"
-          zip -qr "$D.zip" "$D"
-          echo "PKG=$D.zip" >> "$GITHUB_ENV"
-          ls -l "$D.zip"
+        run: tools/package.sh windows-x86_64 "$(git rev-parse --short HEAD)"
 
       - uses: actions/upload-artifact@v7
         with:
           name: bencsnip-windows
-          path: ${{ env.PKG }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # The Windows installer, from the zip the job above produced.
+  #
+  # On Linux, because makensis is a cross-compiler - it writes a perfectly
+  # ordinary Windows .exe from a Linux host - and because putting it in its own
+  # job means the thing you download from a push is assembled exactly the way
+  # release.yml assembles it.
+  # ------------------------------------------------------------------
+  installer:
+    name: windows installer
+    needs: windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: bencsnip-windows
+          path: dl
+
+      - name: NSIS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nsis
+
+      - name: Assemble
+        run: |
+          V="$(git rev-parse --short HEAD)"
+          rm -rf stage && mkdir -p stage dist
+          unzip -qo dl/*.zip -d /tmp/portable
+          cp /tmp/portable/*/* stage/
+          ls -l stage
+
+          makensis -V2 \
+            -DVERSION="$V" \
+            -DVIVERSION="0.0.0.0" \
+            -DSRCDIR="$PWD/stage" \
+            -DICONFILE="$PWD/assets/icon/bencsnip.ico" \
+            -DARTDIR="$PWD/assets/brand" \
+            -DOUTFILE="$PWD/dist/bencsnip-$V-windows-setup.exe" \
+            tools/windows-installer.nsi
+
+          # It has to be an installer, not merely a file that was produced.
+          file dist/*.exe | tee /tmp/kind.txt
+          grep -qi "nullsoft" /tmp/kind.txt
+          ls -l dist/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bencsnip-windows-setup
+          path: dist/*
           if-no-files-found: error
