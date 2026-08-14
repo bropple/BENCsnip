@@ -20,6 +20,14 @@ name: release
 # The ffmpeg build takes fifteen to thirty minutes per platform and is cached
 # on the hash of the script that produces it, so only the first release after a
 # change to it pays for one.
+#
+# With one wrinkle worth knowing before you go looking for it: GitHub scopes
+# caches by ref. A run triggered by pushing a tag writes its caches under
+# refs/tags/whatever, where nothing else will ever look for them. Reads fall
+# back to the default branch, so caches written by a run on main are visible to
+# every later tag - which means the first tagged release builds ffmpeg five
+# times and looks like the cache is not working. It is; it just had nothing on
+# main to read yet.
 
 on:
   push:
