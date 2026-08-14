@@ -1073,6 +1073,10 @@ bool g_timing = false;
  * machine that can answer it. */
 bool g_noMsaa = false;
 
+/* Filled in by trace_hook from raylib's own startup log. */
+char g_glVendor[128];
+char g_glRenderer[128];
+
 struct Mark {
     const char *what;
     double at;                 /* ms since main started */
@@ -1120,7 +1124,46 @@ double startupWindowMs()
 
 double startupReadyMs() { return g_nmarks ? g_marks[g_nmarks - 1].at : 0.0; }
 
+/* Who is actually drawing. A machine that turns out to be running a software
+ * renderer explains a slow start and a slow everything-else at once, and it
+ * is not something anybody can be expected to know off hand. */
+const char *glRenderer() { return g_glRenderer[0] ? g_glRenderer : "unknown"; }
+const char *glVendor() { return g_glVendor[0] ? g_glVendor : "unknown"; }
+
 namespace {
+
+/* What raylib says about itself, stamped with when it said it.
+ *
+ * InitWindow is one call from here and ten seconds long on some Windows
+ * machines, so the only way to see inside it is to timestamp the log it
+ * writes as it goes. The step before the gap is the step that took the time.
+ *
+ * The callback is installed whether or not anyone asked for timings, because
+ * it is also where the name of the graphics driver comes past - and a driver
+ * that turns out to be a software renderer explains a great deal, both about
+ * a slow start and about everything after it.
+ */
+void trace_hook(int level, const char *text, va_list args)
+{
+    char buf[512];
+    vsnprintf(buf, sizeof buf, text, args);
+
+    /* raylib prints these as their own lines under "OpenGL device
+     * information", one field each. */
+    const char *v = strstr(buf, "Vendor:");
+    const char *r = strstr(buf, "Renderer:");
+    if (v && !g_glVendor[0]) snprintf(g_glVendor, sizeof g_glVendor, "%s", v + 8);
+    if (r && !g_glRenderer[0]) snprintf(g_glRenderer, sizeof g_glRenderer, "%s", r + 10);
+
+    /* Quiet unless asked. Warnings and worse always come through, which is
+     * what the log level used to be set to. */
+    if (!g_timing && level < LOG_WARNING) return;
+
+    const double at =
+        std::chrono::duration<double, std::milli>(sn_clock::now() - g_t0).count();
+    printf("  %8.1f ms  raylib: %s\n", at, buf);
+    fflush(stdout);
+}
 
 void timing_report()
 {
@@ -1241,7 +1284,11 @@ static int run(int argc, char **argv)
     unsigned flags = FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT;
     if (!g_noMsaa) flags |= FLAG_MSAA_4X_HINT;
     SetConfigFlags(flags);
-    SetTraceLogLevel(LOG_WARNING);
+    /* Everything reaches the hook, which decides what to print. It has to see
+     * the informational lines even when nothing is being timed, because the
+     * graphics driver's name comes past as one of them. */
+    SetTraceLogLevel(LOG_ALL);
+    SetTraceLogCallback(trace_hook);
     mark("before window");
     if (g_timing) { printf("  ... asking for the window and a GL context\n"); fflush(stdout); }
     InitWindow(1280, 760, SN_NAME " " SN_VERSION);

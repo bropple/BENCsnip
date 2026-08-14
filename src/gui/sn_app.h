@@ -167,6 +167,8 @@ const char *startupPhaseName(int i);
 double startupPhaseMs(int i);
 double startupWindowMs();
 double startupReadyMs();
+const char *glRenderer();
+const char *glVendor();
 
 void previewPane(App &a, Rectangle r);
 

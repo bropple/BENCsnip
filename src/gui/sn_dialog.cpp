@@ -876,6 +876,7 @@ void infoWindow(App &a)
         row("version", SN_VERSION);
         row("ffmpeg", libVersion().c_str());
         row("raylib", RAYLIB_VERSION);
+        row("graphics", glRenderer());
         snprintf(line, sizeof line, "%d x %d", GetScreenWidth(), GetScreenHeight());
         row("window", line);
         snprintf(line, sizeof line, "%d Hz, %d channels", (int)RATE, (int)CHANS);
