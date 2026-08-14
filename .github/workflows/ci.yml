@@ -285,17 +285,24 @@ jobs:
       # which commit it came from. Windows has no executable bit to lose, so
       # the zip is not the hazard it is on the other two platforms.
       #
-      # The ffmpeg DLLs travel with it, because this build needs them.
+      # The MSYS2 DLLs travel with it, because this build needs them - and
+      # every DLL, not just ffmpeg's five: libavcodec alone pulls in x264,
+      # vpx, opus, dav1d and a dozen more, and a zip holding avcodec without
+      # them is a zip that does not start. `ldd` resolves the whole tree,
+      # which is why it is used here rather than reading the import table.
+      #
+      # The release build has none of this: it links a static ffmpeg and the
+      # archive is one file.
       - name: Package
         run: |
           D="bencsnip-$(git rev-parse --short HEAD)-windows-x86_64"
           mkdir -p "$D"
           cp bencsnip.exe README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
-          for dll in $(objdump -p bencsnip.exe | sed -n 's/.*DLL Name: \(av\|sw\|postproc\).*/&/p' \
-                       | sed 's/.*DLL Name: //'); do
-            cp "/ucrt64/bin/$dll" "$D"/ 2>/dev/null || true
+          ldd bencsnip.exe | awk '/ucrt64/ {print $3}' | sort -u | while read -r dll; do
+            cp "$dll" "$D"/
           done
-          ls "$D"
+          ls "$D" | head -40
+          echo "$(ls "$D"/*.dll 2>/dev/null | wc -l) DLLs alongside it"
           zip -qr "$D.zip" "$D"
           echo "PKG=$D.zip" >> "$GITHUB_ENV"
           ls -l "$D.zip"

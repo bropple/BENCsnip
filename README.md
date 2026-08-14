@@ -4,11 +4,18 @@
 
 # BENCsnip
 
+[![build](https://github.com/bropple/BENCsnip/actions/workflows/ci.yml/badge.svg)](https://github.com/bropple/BENCsnip/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-78b946)](LICENSE)
+
 A video editor for the jobs that should take a minute. Drag a file in, cut the
 boring bit out, export. It opens whatever ffmpeg opens, which is nearly
 everything, and it does not ask you to make an account first.
 
 ![the BENCsnip window](docs/gui.png)
+
+**[Download a build](https://github.com/bropple/BENCsnip/releases/latest)** for
+Linux, macOS or Windows — each one carries its own ffmpeg and needs nothing
+installed — or `make` it, which takes about twenty seconds.
 
 It is roughly what Clipchamp is for, without the sign-in, the upload, the
 watermark, the subscription tier that unlocks 1080p, or the four seconds of
