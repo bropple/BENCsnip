@@ -16,14 +16,22 @@
 #include <cstdlib>
 #include <cstring>
 
+using std::memset;
 using std::snprintf;
 using std::strlen;
 
 /* ------------------------------------------------------------------ */
 #if defined(_WIN32)
 
-#include <commdlg.h>
+/* windows.h first, and not alphabetically. commdlg.h does not include it and
+ * cannot stand alone: on its own it pulls in prsht.h, which uses UINT,
+ * CALLBACK and LPCDLGTEMPLATE before anything has defined them, and the
+ * compiler reports a hundred errors inside the system headers with nothing
+ * pointing at the include order that caused them. Sorting these two lines is
+ * enough to break the Windows build. */
 #include <windows.h>
+
+#include <commdlg.h>
 
 /* The filter is a run of NUL-terminated strings ending in a second NUL, which
  * is why it is assembled by hand rather than with one snprintf. */
@@ -68,7 +76,7 @@ int sn_open_dialog(void *owner, const char *title, const char *startDir,
     build_filter(filter, sizeof filter, filterDesc, exts);
     path[0] = '\0';
 
-    memset(&ofn, 0, sizeof ofn);
+    std::memset(&ofn, 0, sizeof ofn);
     ofn.lStructSize = sizeof ofn;
     ofn.hwndOwner = (HWND)owner;
     ofn.lpstrFilter = filter;
@@ -114,7 +122,7 @@ int sn_save_dialog(void *owner, const char *title, const char *defaultName,
     build_filter(filter, sizeof filter, filterDesc, ext);
     snprintf(path, sizeof path, "%s", defaultName ? defaultName : "");
 
-    memset(&ofn, 0, sizeof ofn);
+    std::memset(&ofn, 0, sizeof ofn);
     ofn.lStructSize = sizeof ofn;
     ofn.hwndOwner = (HWND)owner;
     ofn.lpstrFilter = filter;

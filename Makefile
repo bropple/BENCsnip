@@ -171,12 +171,16 @@ $(FF_STAMP): FORCE
 ifeq ($(OS),Windows_NT)
   GUI_RES  := src/gui/bencsnip.res.o
   GUI_LINK := -mwindows -static -static-libgcc -static-libstdc++
+  # GetOpenFileName and GetSaveFileName live in comdlg32. raylib brings in
+  # gdi32, winmm and opengl32 and nothing else, so without this the link fails
+  # on two symbols and nowhere says which library they belong to.
+  WIN_LIBS := -lcomdlg32
 else
   GUI_RES  :=
   GUI_LINK :=
 endif
 
-LDLIBS_GUI := $(RL_LIBS) $(RL_SYS) $(FF_LIBS)
+LDLIBS_GUI := $(RL_LIBS) $(RL_SYS) $(FF_LIBS) $(WIN_LIBS)
 
 .PHONY: all gui core test probe clean info check-deps
 
