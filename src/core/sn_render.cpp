@@ -108,9 +108,12 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
     bool any = false;
     if (!m_p) { out->rgba = m_canvas; return false; }
 
-    /* Bottom to top: tracks are stored top-first, so this walks backwards.
-     * Only video tracks take part. */
-    for (int ti = (int)m_p->tracks.size() - 1; ti >= 0; ti--) {
+    /* Front to back is bottom to top of the list: the top row is the back of
+     * the picture, so it is drawn first and everything else lands on top of
+     * it. That is the opposite of what most editors do and it is what this
+     * one was asked for - see the note on the track operations in
+     * sn_timeline.h. */
+    for (size_t ti = 0; ti < m_p->tracks.size(); ti++) {
         const Track &tr = m_p->tracks[ti];
         if (tr.kind != TRACK_VIDEO || tr.muted) continue;
 
@@ -123,34 +126,74 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
         Source *s = source(c->source);
         if (!s || !s->hasVideo()) continue;
 
-        int fw, fh, ox, oy;
-        fit(b->info.dispW(), b->info.dispH(), w, h, &fw, &fh, &ox, &oy);
+        /* --- where this layer goes ---
+         *
+         * The crop is taken first, because it changes the shape that gets
+         * fitted: a 16:9 source cropped to its middle third is a 16:3 layer,
+         * and fitting the uncropped aspect and then cutting would leave it
+         * the wrong size and off centre. */
+        const double keepX = std::max(0.02, 1.0 - tr.cropL - tr.cropR);
+        const double keepY = std::max(0.02, 1.0 - tr.cropT - tr.cropB);
 
-        if (!s->frameAt(c->srcAt(t), &m_layer, fw, fh)) continue;
+        const int srcW = std::max(1, (int)std::lround(b->info.dispW() * keepX));
+        const int srcH = std::max(1, (int)std::lround(b->info.dispH() * keepY));
+
+        const double sc = std::max(0.01, tr.scale);
+        int fw, fh, ox, oy;
+        fit(srcW, srcH, std::max(1, (int)std::lround(w * sc)),
+            std::max(1, (int)std::lround(h * sc)), &fw, &fh, &ox, &oy);
+
+        /* fit centred it inside the scaled box; what matters is where it sits
+         * on the canvas, which is the free space split by x and y. -1 is hard
+         * against the left or top, +1 against the right or bottom. */
+        ox = (int)std::lround((w - fw) * 0.5 * (1.0 + tr.x));
+        oy = (int)std::lround((h - fh) * 0.5 * (1.0 + tr.y));
+
+        /* The decoder is asked for whatever size makes the *kept* part come
+         * out at fw x fh, and the crop is then a sub-rectangle of it. Scaling
+         * the whole frame and cutting afterwards is the same picture for one
+         * extra copy, and this way swscale does the work. */
+        const int fullW = std::max(1, (int)std::lround(fw / keepX));
+        const int fullH = std::max(1, (int)std::lround(fh / keepY));
+
+        if (!s->frameAt(c->srcAt(t), &m_layer, fullW, fullH)) continue;
         if (!m_layer.valid()) continue;
+
+        const int cx = (int)std::lround(tr.cropL * m_layer.w);
+        const int cy = (int)std::lround(tr.cropT * m_layer.h);
 
         const double g = fadeGain(*c, t);
         if (g <= 0.0) { any = true; continue; }
 
-        const uint8_t *src = m_layer.rgba.data();
-        const int lw = std::min(m_layer.w, w - ox);
-        const int lh = std::min(m_layer.h, h - oy);
+        /* Clipped against the canvas on all four sides: a track pushed off
+         * the edge is a legal thing to ask for, and it must not be a write
+         * past the end of the buffer. */
+        int x0 = std::max(0, ox), y0 = std::max(0, oy);
+        int x1 = std::min(w, ox + fw), y1 = std::min(h, oy + fh);
+        if (x1 <= x0 || y1 <= y0) { any = true; continue; }
 
-        if (g >= 0.999) {
-            for (int y = 0; y < lh; y++)
-                std::memcpy(m_canvas.data() + (((size_t)(y + oy) * w) + ox) * 4,
-                            src + (size_t)y * m_layer.w * 4, (size_t)lw * 4);
-        } else {
-            const int a = (int)std::lround(g * 255.0);
-            for (int y = 0; y < lh; y++) {
-                uint8_t *d = m_canvas.data() + (((size_t)(y + oy) * w) + ox) * 4;
-                const uint8_t *ss = src + (size_t)y * m_layer.w * 4;
-                for (int x = 0; x < lw * 4; x += 4) {
-                    d[x + 0] = (uint8_t)((ss[x + 0] * a + d[x + 0] * (255 - a)) / 255);
-                    d[x + 1] = (uint8_t)((ss[x + 1] * a + d[x + 1] * (255 - a)) / 255);
-                    d[x + 2] = (uint8_t)((ss[x + 2] * a + d[x + 2] * (255 - a)) / 255);
-                    d[x + 3] = 255;
+        const int a = (int)std::lround(std::min(1.0, g) * 255.0);
+
+        for (int y = y0; y < y1; y++) {
+            const int sy = cy + (y - oy);
+            if (sy < 0 || sy >= m_layer.h) continue;
+
+            uint8_t *d = m_canvas.data() + ((size_t)y * w + x0) * 4;
+            const uint8_t *ss = m_layer.rgba.data() + (size_t)sy * m_layer.w * 4;
+
+            for (int x = x0; x < x1; x++, d += 4) {
+                const int sx = cx + (x - ox);
+                if (sx < 0 || sx >= m_layer.w) continue;
+                const uint8_t *p = ss + (size_t)sx * 4;
+
+                if (a >= 255) {
+                    d[0] = p[0]; d[1] = p[1]; d[2] = p[2];
+                } else {
+                    d[0] = (uint8_t)((p[0] * a + d[0] * (255 - a)) / 255);
+                    d[1] = (uint8_t)((p[1] * a + d[1] * (255 - a)) / 255);
+                    d[2] = (uint8_t)((p[2] * a + d[2] * (255 - a)) / 255);
                 }
+                d[3] = 255;
             }
         }
         any = true;

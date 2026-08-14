@@ -62,8 +62,38 @@ struct Track {
     int height = 0;          /* 0 = the view's default                   */
     std::vector<Clip> clips; /* kept sorted by pos, always               */
 
+    /* --- where this track's picture sits on the canvas (video only) ---
+     *
+     * The whole track rather than the clip, because what this is for is a
+     * layout - a small video in the corner of a big one, two side by side -
+     * and a layout that changed halfway through a track would be a different
+     * feature with a different interface.
+     *
+     * Everything is relative to the canvas, so changing the project's size
+     * moves nothing: a track set to half scale on the left is still half
+     * scale on the left at 4K.
+     *
+     *   scale  1 fills the canvas the way an untouched track always has -
+     *          fitted, with black bars where the aspect does not match.
+     *          0.5 is half that.
+     *   x, y   0 centres it. -1 puts it hard against the left or top edge,
+     *          +1 against the right or bottom. Which is exactly what side by
+     *          side needs: two tracks at 0.5, one at -1 and one at +1.
+     *   crop   the fraction taken off each edge of the source before any of
+     *          that, so the aspect that gets fitted is the aspect of what is
+     *          left. */
+    double scale = 1.0;
+    double x = 0.0, y = 0.0;
+    double cropL = 0.0, cropR = 0.0, cropT = 0.0, cropB = 0.0;
+
     const Clip *at(double t) const;
     Clip *at(double t);
+
+    /* Whether this track is doing anything but filling the canvas. The
+     * renderer takes a shorter path when it is not, and the interface says
+     * so rather than making someone read four numbers to find out. */
+    bool transformed() const;
+    void resetTransform();
 };
 
 /* Where a clip lives, for the GUI's selection. Either half being negative
@@ -111,6 +141,28 @@ struct Project {
 /* A project with one video track and one audio track, which is what an empty
  * window should show: dropping a file has somewhere to land. */
 Project newProject();
+
+/* --- tracks -------------------------------------------------------- *
+ * Video tracks are listed above audio tracks and stay that way; a video
+ * track under an audio one would be a list whose order means two different
+ * things at once.
+ *
+ * Within the video tracks, the order IS the compositing order, and the top
+ * row is the back of the picture. That is the opposite of the convention
+ * most editors use, and it is what this one was asked for: the row you read
+ * first is the layer everything else sits on top of.
+ * ------------------------------------------------------------------- */
+
+/* Returns the index of the new track. */
+int addTrack(Project &p, TrackKind kind, int atIndex = -1);
+
+/* False when it is the last track of its kind - something has to be left to
+ * drop a file onto. Clips on it go with it. */
+bool removeTrack(Project &p, int idx);
+
+/* Swap a track with its neighbour of the same kind. Returns where it ended
+ * up, which is where it started if it was already at the end. */
+int moveTrack(Project &p, int idx, int delta);
 
 /* --- editing ------------------------------------------------------- *
  * All of these keep each track's clips sorted and non-overlapping. None of

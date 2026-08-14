@@ -230,15 +230,33 @@ void previewPane(App &a, Rectangle r)
     Rectangle view = {r.x, r.y, r.width, r.height - TRANSPORT_H};
     DrawRectangleRec(view, SN_BG);
 
-    /* Ask the player for pictures at the size they are actually shown. A 4K
-     * source in a 700-pixel pane decoded at 4K is four times the work for the
-     * same picture. */
-    const int pw = std::max(64, (int)view.width - 16);
-    const int ph = std::max(36, (int)view.height - 16);
+    /* The preview is the canvas, at the canvas's own shape.
+     *
+     * It used to ask for whatever rectangle the pane happened to be, and that
+     * was fine while every layer filled the frame - one picture fitted into
+     * any box looks the same. It stopped being fine the moment tracks could
+     * be placed on the canvas: "the right half" of a 16:9 project is not the
+     * right half of a 3:1 pane, so a side-by-side layout previewed as
+     * something the export would never produce.
+     *
+     * So the size asked for has the project's aspect, scaled to fit the pane,
+     * and what comes back is drawn at exactly that size. */
+    const double par = a.proj.height > 0
+                           ? (double)a.proj.width / a.proj.height : 16.0 / 9.0;
 
-    /* Snapped to a multiple of sixteen, so that dragging the window edge does
-     * not throw away the decoder's scaler once per pixel. */
-    a.player.setPreviewSize((pw + 15) & ~15, (ph + 15) & ~15);
+    double fitW = view.width - 16, fitH = (view.width - 16) / par;
+    if (fitH > view.height - 16) {
+        fitH = view.height - 16;
+        fitW = fitH * par;
+    }
+
+    /* Even, and never smaller than something a scaler will accept. Snapping
+     * to a multiple of sixteen would be kinder to the decoder but would bend
+     * the aspect, which is the thing this is here to keep. */
+    const int pw = std::max(64, ((int)fitW) & ~1);
+    const int ph = std::max(36, ((int)fitH) & ~1);
+
+    a.player.setPreviewSize(pw, ph);
 
     VideoFrame f;
     if (a.player.takeFrame(&f) && f.valid()) {
@@ -259,20 +277,13 @@ void previewPane(App &a, Rectangle r)
     }
 
     if (a.preview.id && a.proj.duration() > 0) {
-        /* Letterboxed, and never scaled past its own size by more than the
-         * pane needs - the picture is the project's aspect either way. */
-        const float sa = (float)a.previewW / a.previewH;
-        const float va = view.width / view.height;
-        Rectangle dst = view;
-        if (sa > va) {
-            dst.height = view.width / sa;
-            dst.y += (view.height - dst.height) * 0.5f;
-        } else {
-            dst.width = view.height * sa;
-            dst.x += (view.width - dst.width) * 0.5f;
-        }
-        dst.x = std::floor(dst.x);
-        dst.y = std::floor(dst.y);
+        /* Centred at its own size: it was rendered at the canvas's aspect, so
+         * there is nothing left to letterbox. The frame drawn round it is
+         * where the canvas ends, which is worth seeing when a track has been
+         * pushed off the edge of it. */
+        Rectangle dst = {std::floor(view.x + (view.width - a.previewW) * 0.5f),
+                         std::floor(view.y + (view.height - a.previewH) * 0.5f),
+                         (float)a.previewW, (float)a.previewH};
         DrawTexturePro(a.preview, Rectangle{0, 0, (float)a.previewW, (float)a.previewH},
                        dst, Vector2{0, 0}, 0, WHITE);
         DrawRectangleLinesEx(dst, 1, SN_BORDER);
@@ -490,6 +501,18 @@ static void toolbar(App &a, Rectangle r)
         zoomFit(a);
     }
     x += bw + 4;
+    gap();
+
+    {
+        char sz[64];
+        snprintf(sz, sizeof sz, "%dx%d", a.proj.width, a.proj.height);
+        Rectangle cb = {x, y, 86, bh};
+        if (sn_button(&ui, 24, cb, sz, 1)) a.modal = MODAL_CANVAS;
+        if (CheckCollisionPointRec(GetMousePosition(), cb) && !sn_ui_blocked(&ui))
+            sn_tip(&ui, "the canvas: %dx%d at %.3f fps. Click to change it",
+                   a.proj.width, a.proj.height, a.proj.fps);
+        x += 90;
+    }
 
     /* --- the right-hand end --- */
     Rectangle info = {r.x + r.width - 34, y, bw, bh};
@@ -506,12 +529,61 @@ static void toolbar(App &a, Rectangle r)
         }
     }
 
-    /* The project's name, and whether it has unsaved work in it. */
-    char title[256];
-    snprintf(title, sizeof title, "%s%s", a.proj.name.c_str(), a.proj.dirty ? " *" : "");
-    const float tw = sn_measure(&ui, SN_F_SMALL, title, 1.0f);
-    sn_text_spaced(&ui, SN_F_SMALL, title, exp.x - 20 - tw, y + 5,
-                   a.proj.dirty ? SN_AMBER : SN_DIM);
+    /* --- the project's name ---
+     *
+     * Double-click it to change it. It is the name the export dialog suggests
+     * a filename from, so this is also where you decide what the file is
+     * going to be called - which is why it is here, next to the button that
+     * writes it, rather than in a settings window.
+     */
+    if (a.renaming) {
+        Rectangle nameR = {exp.x - 20 - 220, y + 2, 220, 22};
+        if (sn_field(&ui, 23, nameR, a.renameText, "project name")) {
+            /* nothing per keystroke - it is applied on Enter */
+        }
+        ui.focus = 23;
+
+        const bool done = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER);
+        const bool off = IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                         !CheckCollisionPointRec(GetMousePosition(), nameR);
+
+        if (done || off) {
+            std::string n = a.renameText;
+            while (!n.empty() && n.back() == ' ') n.pop_back();
+            while (!n.empty() && n.front() == ' ') n.erase(n.begin());
+            if (!n.empty() && n != a.proj.name) {
+                a.proj.name = n;
+                a.proj.dirty = true;
+                exportRenamed(a);          /* the suggested filename follows */
+                a.say("renamed to %s", n.c_str());
+            }
+            a.renaming = false;
+            ui.focus = 0;
+        }
+        if (IsKeyPressed(KEY_ESCAPE)) { a.renaming = false; ui.focus = 0; }
+    } else {
+        char title[256];
+        snprintf(title, sizeof title, "%s%s", a.proj.name.c_str(),
+                 a.proj.dirty ? " *" : "");
+        const float tw = sn_measure(&ui, SN_F_SMALL, title, 1.0f);
+        Rectangle hit = {exp.x - 26 - tw, y + 2, tw + 12, 22};
+
+        const bool hot = CheckCollisionPointRec(GetMousePosition(), hit) &&
+                         !sn_ui_blocked(&ui);
+        if (hot) {
+            sn_cursor(&ui, MOUSE_CURSOR_IBEAM);
+            sn_tip(&ui, "double-click to rename the project - the export is named after it");
+            DrawRectangleLinesEx(hit, 1, SN_BORDER);
+        }
+        if (hot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && sn_double_click(&ui, 23)) {
+            a.renaming = true;
+            a.renameText = a.proj.name;
+            ui.caret = (int)a.renameText.size();
+        }
+
+        sn_text_spaced(&ui, SN_F_SMALL, title, hit.x + 6, y + 5,
+                       a.proj.dirty ? SN_AMBER : SN_DIM);
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -644,6 +716,21 @@ static void menus(App &a)
         case 2: doDelete(a, true); break;
         case 4: c->muted = !c->muted; a.changed(); break;
         case 5: c->fadeIn = c->fadeOut = 0; a.changed(); a.say("fades cleared"); break;
+        case 6: {
+            /* Unlink. Every clip that shares the link id loses it, which is
+             * both halves and no more: a split earlier gave each pair its own
+             * id precisely so this cannot reach across a cut. */
+            const int link = c->link;
+            if (!link) break;
+            int n = 0;
+            for (Track &t : a.proj.tracks)
+                for (Clip &x : t.clips)
+                    if (x.link == link) { x.link = 0; n++; }
+            a.clearSel();
+            a.changed();
+            a.say("unlinked - the %d halves move on their own now", n);
+            break;
+        }
         default: break;
         }
         return;
@@ -711,6 +798,112 @@ static void menus(App &a)
 static const char *g_shot = nullptr;
 static int g_shotAfter = 60;
 
+
+/* ------------------------------------------------------------------ *
+ * The splash
+ *
+ * Not decoration, and not a delay: the window exists from the moment
+ * InitWindow returns, and without this it sits there empty until every other
+ * piece of startup has finished. On a machine where the graphics driver takes
+ * its time, or where a project on the command line has twenty clips to probe,
+ * that empty window is the program looking hung while it works.
+ *
+ * So it draws once per phase, saying which phase. Everything it needs - the
+ * icon, the wordmark, the font - is already inside the executable, and the
+ * font is loaded first precisely so this can use it.
+ *
+ * What it cannot cover is anything before InitWindow: the loader mapping a
+ * 28 MB binary, a virus scanner reading all of it, Gatekeeper verifying a
+ * signature. Those happen before a line of this program runs, and no splash
+ * screen in any program has ever covered them.
+ * ------------------------------------------------------------------ */
+
+namespace {
+
+struct Splash {
+    Texture2D mark = {};      /* the BENCO wordmark   */
+    Texture2D icon = {};      /* the program's icon   */
+    bool ready = false;
+
+    /* No minimum time on screen, deliberately. It is up for exactly as long
+     * as there is work behind it, which on a fast machine is about a tenth of
+     * a second - and a splash screen that outstays the loading it reports is
+     * the thing this program's README makes fun of Clipchamp for. */
+};
+
+Splash g_splash;
+
+void splashInit(App &a)
+{
+    Image m = LoadImageFromMemory(".png", SN_LOGO_PNG, (int)SN_LOGO_PNG_LEN);
+    if (m.data) { g_splash.mark = LoadTextureFromImage(m); UnloadImage(m); }
+
+    Image i = LoadImageFromMemory(".png", SN_ICON_64, (int)SN_ICON_64_LEN);
+    if (i.data) { g_splash.icon = LoadTextureFromImage(i); UnloadImage(i); }
+
+    g_splash.ready = true;
+    (void)a;
+}
+
+/* One frame. `frac` is how far through startup we are, and is honest rather
+ * than smooth - it moves when something actually finished. */
+void splashDraw(App &a, const char *phase, float frac)
+{
+    if (!g_splash.ready) return;
+
+    const float W = (float)GetScreenWidth(), H = (float)GetScreenHeight();
+
+    BeginDrawing();
+    ClearBackground(SN_BG);
+
+    /* A panel rather than the whole window: the window is 1280 wide and a
+     * wordmark stranded in the middle of that much near-black reads as a
+     * program that has failed to draw itself. */
+    Rectangle box = {std::floor(W * 0.5f - 210), std::floor(H * 0.5f - 100), 420, 200};
+    sn_panel(box, SN_PANEL, SN_BORDER);
+
+    if (g_splash.icon.id) {
+        DrawTexturePro(g_splash.icon,
+                       Rectangle{0, 0, (float)g_splash.icon.width,
+                                 (float)g_splash.icon.height},
+                       Rectangle{box.x + 26, box.y + 30, 64, 64}, Vector2{0, 0}, 0,
+                       WHITE);
+    }
+
+    if (g_splash.mark.id) {
+        const float mw = 150.0f;
+        const float mh = mw * (float)g_splash.mark.height / g_splash.mark.width;
+        DrawTexturePro(g_splash.mark,
+                       Rectangle{0, 0, (float)g_splash.mark.width,
+                                 (float)g_splash.mark.height},
+                       Rectangle{box.x + 110, box.y + 30, mw, mh}, Vector2{0, 0}, 0,
+                       SN_EDGE);
+    }
+
+    sn_text_spaced(&a.ui, SN_F_TITLE, SN_NAME, box.x + 110, box.y + 62, SN_TEXT);
+    sn_text(&a.ui, SN_F_SMALL, "version " SN_VERSION, box.x + 112, box.y + 96, SN_DIM);
+
+    sn_divider(box.x + 26, box.y + 132, box.width - 52);
+
+    /* The bar is thin and the phase is spelled out beside it. A bar on its own
+     * says how long; the words say what for, which is the part that tells you
+     * it is alive rather than stuck. */
+    Rectangle bar = {box.x + 26, box.y + 168, box.width - 52, 6};
+    sn_progress(bar, frac, SN_ACCENT);
+    sn_text(&a.ui, SN_F_TINY, phase, box.x + 26, box.y + 146, SN_DIM);
+
+    EndDrawing();
+}
+
+void splashDone()
+{
+    if (g_splash.mark.id) UnloadTexture(g_splash.mark);
+    if (g_splash.icon.id) UnloadTexture(g_splash.icon);
+    g_splash = Splash{};
+}
+
+} /* namespace */
+
 static int run(int argc, char **argv)
 {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT | FLAG_MSAA_4X_HINT);
@@ -718,7 +911,17 @@ static int run(int argc, char **argv)
     InitWindow(1280, 760, SN_NAME " " SN_VERSION);
     SetWindowMinSize(900, 560);
     SetExitKey(KEY_NULL);            /* Escape clears the selection */
+
+    /* The font before anything else, because the splash writes with it and
+     * the splash is what covers everything after this line. It costs a
+     * millisecond and a half. */
+    App a;
+    sn_ui_init(&a.ui);
+    splashInit(a);
+    splashDraw(a, "starting", 0.15f);
+
     InitAudioDevice();
+    splashDraw(a, "sound", 0.35f);
 
     {
         /* Four sizes rather than one: a window manager picks the nearest and
@@ -747,8 +950,8 @@ static int run(int argc, char **argv)
         for (int i = 0; i < got; i++) UnloadImage(icons[i]);
     }
 
-    App a;
-    sn_ui_init(&a.ui);
+    splashDraw(a, "decoders", 0.55f);
+
     a.proj = newProject();
     a.hist.reset(a.proj);
     a.player.start();
@@ -763,6 +966,11 @@ static int run(int argc, char **argv)
             if (!strcmp(argv[i], "--shot") || !strcmp(argv[i], "--frames")) i++;
             continue;
         }
+        /* Named before it is opened, not after: probing a file on a slow
+         * disk is the one part of startup that can take real time, and the
+         * name of the file it is working on is the difference between a
+         * progress bar and an answer. */
+        splashDraw(a, GetFileName(argv[i]), 0.7f);
         doImport(a, argv[i], true);
     }
     /* The playhead ends up past the last import; the point of opening a file
@@ -776,6 +984,9 @@ static int run(int argc, char **argv)
 
     a.hist.reset(a.proj);
     a.proj.dirty = false;
+
+    splashDraw(a, "ready", 1.0f);
+    splashDone();
 
     int frames = 0;
 
@@ -901,6 +1112,8 @@ static int run(int argc, char **argv)
         a.ui.suppress = false;
         switch (a.modal) {
         case MODAL_EXPORT: exportDialog(a); break;
+        case MODAL_LAYOUT: layoutDialog(a); break;
+        case MODAL_CANVAS: canvasDialog(a); break;
         case MODAL_INFO: infoWindow(a); break;
         case MODAL_CONFIRM: confirmDialog(a); break;
         case MODAL_OPEN:
@@ -937,6 +1150,9 @@ static int run(int argc, char **argv)
 
         menus(a);
         sn_ui_overlay(&a.ui);
+
+        /* Once, at the end, after every pane has had its say. */
+        SetMouseCursor(a.ui.cursor);
 
         EndDrawing();
 

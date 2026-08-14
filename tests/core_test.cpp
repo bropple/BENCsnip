@@ -255,6 +255,69 @@ static void test_render()
         if (at(x, 90)[0] > 16 || at(x, 90)[1] > 16 || at(x, 90)[2] > 16) colour = true;
     CHECK(colour, "the middle is not");
 
+    /* Two tracks side by side: each at half scale, one hard left, one hard
+     * right. What has to be true is that the left half of the canvas is the
+     * left track's picture and the right half is the right track's, with the
+     * bands above and below them black - which is what a viewer would call
+     * side by side, and what nothing else in the program checks. */
+    {
+        sn::Project sbs = sn::newProject();
+        std::string e2;
+        int ia = sn::importFile(sbs, V1, &e2);
+        int ib = sn::importFile(sbs, V2, &e2);
+        sbs.width = 640;
+        sbs.height = 360;
+
+        sn::addTrack(sbs, sn::TRACK_VIDEO, 0);
+        sn::placeItem(sbs, ia, 0.0, 0, -2);          /* video only, back track */
+        sn::placeItem(sbs, ib, 0.0, 1, -2);          /* video only, front      */
+
+        sbs.tracks[0].scale = 0.5;
+        sbs.tracks[0].x = -1.0;                      /* hard left  */
+        sbs.tracks[1].scale = 0.5;
+        sbs.tracks[1].x = 1.0;                       /* hard right */
+
+        sn::Renderer r2(&sbs);
+        sn::VideoFrame f2;
+        CHECK(r2.videoAt(1.0, 640, 360, &f2), "both halves have something under them");
+
+        auto px = [&](int x, int y) { return f2.rgba.data() + ((size_t)y * f2.w + x) * 4; };
+        auto lit = [&](int x, int y) {
+            const uint8_t *p = px(x, y);
+            return p[0] > 12 || p[1] > 12 || p[2] > 12;
+        };
+
+        CHECK(lit(160, 180), "the left half is drawn");
+        CHECK(lit(480, 180), "the right half is drawn");
+        CHECK(!lit(320, 10), "and the top of the canvas is still black");
+        CHECK(!lit(320, 350), "as is the bottom");
+    }
+
+    /* Cropping changes the shape that gets fitted, so a source cropped to a
+     * narrow band comes out as a narrow band rather than a squashed frame. */
+    {
+        sn::Project cr = sn::newProject();
+        std::string e3;
+        int ia = sn::importFile(cr, V1, &e3);
+        cr.width = 640;
+        cr.height = 360;
+        sn::placeItem(cr, ia, 0.0, 0, -2);
+
+        cr.tracks[0].cropT = 0.4;
+        cr.tracks[0].cropB = 0.4;      /* keep the middle fifth */
+
+        sn::Renderer r3(&cr);
+        sn::VideoFrame f3;
+        CHECK(r3.videoAt(1.0, 640, 360, &f3), "the cropped track still draws");
+
+        auto lit3 = [&](int x, int y) {
+            const uint8_t *p = f3.rgba.data() + ((size_t)y * f3.w + x) * 4;
+            return p[0] > 12 || p[1] > 12 || p[2] > 12;
+        };
+        CHECK(lit3(320, 180), "the middle is the kept band");
+        CHECK(!lit3(320, 20), "and what was cropped away is not drawn");
+    }
+
     /* Past the end is black, and does not fail. */
     r.videoAt(100.0, 64, 36, &f);
     CHECK(f.valid(), "past the end still returns a frame");
@@ -367,6 +430,22 @@ static void test_export()
                   mi.width, mi.height);
             CHECK(NEAR(mi.duration, p.duration(), 0.35),
                   "and the length of the timeline (%.2f), got %.2f", p.duration(), mi.duration);
+
+            /* The estimate against what actually came out.
+             *
+             * The bounds are wide on purpose. At constant quality the encoder
+             * decides the bitrate from the picture, and these test files are
+             * flat colour bars - about as compressible as video gets, and
+             * measured at 1.8x under the estimate. Real footage lands much
+             * closer. What this catches is not inaccuracy but nonsense: a
+             * change that makes it off by a hundred, or zero. */
+            bool exact = false;
+            const int64_t guess = sn::estimateSize(p, s, &exact);
+            CHECK(!exact, "a render is an estimate, not a promise");
+            CHECK(guess > mi.bytes / 4 && guess < mi.bytes * 6,
+                  "the estimate is in the right country: %lld vs %lld actual",
+                  (long long)guess, (long long)mi.bytes);
+
             remove(s.path.c_str());
         }
     }
@@ -434,6 +513,51 @@ static void test_export()
             CHECK(NEAR(mi.duration, 3.0, 0.25), "three seconds of it, got %.2f", mi.duration);
             remove(s.path.c_str());
         }
+    }
+
+    /* The size estimate. Exact for a copy - it is the source's own bitrate
+     * over the range - and in the right order of magnitude for a render,
+     * which is all a number labelled "about" has to be. */
+    {
+        sn::Project p = sn::newProject();
+        std::string err;
+        int a = sn::importFile(p, V1, &err);
+        if (!a) { CHECK(false, "import: %s", err.c_str()); return; }
+        sn::placeItem(p, a, 0.0);
+
+        sn::MediaInfo mi;
+        sn::probe(V1, &mi, &err);
+
+        sn::ExportSettings s;
+        s.path = "media/out_est.mp4";
+        s.width = p.width;
+        s.height = p.height;
+        s.fps = p.fps;
+
+        bool exact = false;
+        int64_t whole = sn::estimateSize(p, s, &exact);
+        CHECK(exact, "a straight copy of the whole thing is an exact size");
+        CHECK(NEAR(whole, mi.bytes, mi.bytes * 0.02),
+              "and it is the file's own size (%lld vs %lld)", (long long)whole,
+              (long long)mi.bytes);
+
+        /* Half the range is half the bytes. */
+        s.to = mi.duration * 0.5;
+        int64_t half = sn::estimateSize(p, s, &exact);
+        CHECK(NEAR(half, whole / 2, whole * 0.05), "half the range is half the size");
+
+        /* Re-encoding cannot be exact, and must still be sane: bigger at
+         * higher quality, smaller at lower. */
+        s.to = -1;
+        s.allowCopy = false;
+        s.crf = 18;
+        int64_t good = sn::estimateSize(p, s, &exact);
+        CHECK(!exact, "a render is a guess and says so");
+        s.crf = 32;
+        int64_t rough = sn::estimateSize(p, s, &exact);
+        CHECK(good > rough, "better quality estimates bigger (%lld vs %lld)",
+              (long long)good, (long long)rough);
+        CHECK(rough > 0, "and neither is zero");
     }
 
     /* The fast path: one clip, trimmed, same size, same codecs. */

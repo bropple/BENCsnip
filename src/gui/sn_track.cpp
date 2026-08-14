@@ -25,6 +25,7 @@ namespace sn {
 enum {
     RULER_H = 24,
     HEAD_W = 104,
+    SCROLL_W = 11,          /* the bars along the right and the bottom */
     LANE_H = 56,
     LANE_GAP = 2,
     EDGE_GRAB = 7,       /* how close to an edge counts as the edge */
@@ -47,10 +48,21 @@ float App::xAt(double t) const
 
 static Rectangle lane_rect(const App &a, int idx)
 {
-    const float top = a.rTimeline.y + RULER_H + 1;
+    const float top = a.rTimeline.y + RULER_H + 1 - a.trackScroll;
     return Rectangle{a.rTimeline.x + HEAD_W,
                      top + (float)idx * (LANE_H + LANE_GAP),
-                     a.rTimeline.width - HEAD_W, LANE_H};
+                     a.rTimeline.width - HEAD_W - SCROLL_W, LANE_H};
+}
+
+/* How tall the track list wants to be, and how much room it has. */
+static float tracks_height(const App &a)
+{
+    return (float)a.proj.tracks.size() * (LANE_H + LANE_GAP);
+}
+
+static float tracks_room(const App &a)
+{
+    return a.rTimeline.height - RULER_H - 1 - SCROLL_W;
 }
 
 static Rectangle head_rect(const App &a, int idx)
@@ -218,8 +230,11 @@ static void draw_clip(App &a, int idx, const Clip &c, bool video, bool hot)
 static void draw_ruler(App &a, Rectangle r)
 {
     sn_ui &ui = a.ui;
+    /* Only from the head column rightwards. The gutter to its left belongs to
+     * the track buttons, and painting the whole strip here put them under it -
+     * still clickable, which is the worst version of invisible. */
     Rectangle ruler = {r.x + HEAD_W, r.y, r.width - HEAD_W, RULER_H};
-    DrawRectangleRec(Rectangle{r.x, r.y, r.width, RULER_H}, SN_PANEL);
+    DrawRectangleRec(ruler, SN_PANEL);
 
     /* A tick interval that gives a label every eighty pixels or so, from a
      * fixed set - otherwise the labels are at 0.37-second intervals and the
@@ -281,23 +296,90 @@ static void draw_heads(App &a)
 {
     sn_ui &ui = a.ui;
 
+    /* The gutter above the heads, which is otherwise empty ruler. Two buttons
+     * rather than one: what a person wants is either a video track or an
+     * audio one, and a single + that then asks which is a dialog nobody
+     * needs. */
+    {
+        Rectangle g = {a.rTimeline.x, a.rTimeline.y, HEAD_W, RULER_H};
+        DrawRectangleRec(g, SN_PANEL);
+
+        Rectangle bv = {g.x + 6, g.y + 3, 44, 18};
+        Rectangle ba = {g.x + 54, g.y + 3, 44, 18};
+
+        if (sn_button(&ui, 2900, bv, "+V", 1)) {
+            const int at = addTrack(a.proj, TRACK_VIDEO);
+            a.changed();
+            a.say("added %s - the top row is the back of the picture",
+                  a.proj.tracks[at].name.c_str());
+        }
+        if (sn_button(&ui, 2901, ba, "+A", 1)) {
+            const int at = addTrack(a.proj, TRACK_AUDIO);
+            a.changed();
+            a.say("added %s", a.proj.tracks[at].name.c_str());
+        }
+        if (CheckCollisionPointRec(GetMousePosition(), bv) && !sn_ui_blocked(&ui))
+            sn_tip(&ui, "add a video track. Video tracks all play at once - the top "
+                        "row is the back, the bottom row is in front");
+        if (CheckCollisionPointRec(GetMousePosition(), ba) && !sn_ui_blocked(&ui))
+            sn_tip(&ui, "add an audio track. Audio tracks are mixed together");
+    }
+
+    BeginScissorMode((int)a.rTimeline.x, (int)(a.rTimeline.y + RULER_H + 1), HEAD_W,
+                     (int)std::max(0.0f, tracks_room(a)));
+
     for (size_t i = 0; i < a.proj.tracks.size(); i++) {
         Track &t = a.proj.tracks[i];
         Rectangle h = head_rect(a, (int)i);
+        if (h.y + h.height < a.rTimeline.y + RULER_H) continue;
         if (h.y > a.rTimeline.y + a.rTimeline.height) break;
 
         DrawRectangleRec(h, SN_PANEL);
         DrawLine((int)(h.x + h.width) - 1, (int)h.y, (int)(h.x + h.width) - 1,
                  (int)(h.y + h.height), SN_BORDER);
 
-        sn_text_spaced(&ui, SN_F_SMALL, t.name.c_str(), h.x + 8, h.y + 6,
+        sn_text_spaced(&ui, SN_F_SMALL, t.name.c_str(), h.x + 8, h.y + 5,
                        t.muted ? SN_EDGE : SN_TEXT);
 
-        const float by = h.y + h.height - 24;
-        Rectangle b1 = {h.x + 8, by, 20, 18};
-        Rectangle b2 = {h.x + 32, by, 20, 18};
+        /* A track doing something to its picture says so, because four
+         * numbers in a dialog are easy to forget having set. */
+        if (t.kind == TRACK_VIDEO && t.transformed())
+            sn_draw_icon(SN_I_CROP, Rectangle{h.x + 40, h.y + 6, 11, 11}, SN_ACCENT);
 
         const int id = 3000 + (int)i * 8;
+
+        /* --- reorder, top right --- */
+        const bool canUp = (int)i > 0 && a.proj.tracks[i - 1].kind == t.kind;
+        const bool canDn = i + 1 < a.proj.tracks.size() &&
+                           a.proj.tracks[i + 1].kind == t.kind;
+
+        Rectangle up = {h.x + h.width - 38, h.y + 3, 16, 15};
+        Rectangle dn = {h.x + h.width - 20, h.y + 3, 16, 15};
+
+        if (sn_icon_button(&ui, id + 2, up, SN_I_UP, canUp, 0,
+                           t.kind == TRACK_VIDEO ? "move up, which is further back"
+                                                 : "move this track up") &&
+            canUp) {
+            moveTrack(a.proj, (int)i, -1);
+            a.clearSel();
+            a.changed();
+        }
+        if (sn_icon_button(&ui, id + 3, dn, SN_I_DOWN, canDn, 0,
+                           t.kind == TRACK_VIDEO ? "move down, which is further forward"
+                                                 : "move this track down") &&
+            canDn) {
+            moveTrack(a.proj, (int)i, 1);
+            a.clearSel();
+            a.changed();
+        }
+
+        /* --- the switches, along the bottom --- */
+        const float by = h.y + h.height - 23;
+        Rectangle b1 = {h.x + 6, by, 20, 18};
+        Rectangle b2 = {h.x + 29, by, 20, 18};
+        Rectangle b3 = {h.x + 52, by, 20, 18};
+        Rectangle b4 = {h.x + 78, by, 20, 18};
+
         if (t.kind == TRACK_VIDEO) {
             if (sn_icon_button(&ui, id, b1, t.muted ? SN_I_EYE_OFF : SN_I_EYE, 1, t.muted,
                                t.muted ? "show this track" : "hide this track")) {
@@ -316,7 +398,36 @@ static void draw_heads(App &a)
             t.locked = !t.locked;
             a.changed(true);
         }
+
+        if (t.kind == TRACK_VIDEO) {
+            if (sn_icon_button(&ui, id + 4, b3, SN_I_CROP, 1, t.transformed(),
+                               "size, position and crop for this track")) {
+                a.layoutTrack = (int)i;
+                a.modal = MODAL_LAYOUT;
+            }
+        }
+
+        /* Only ever one of a kind left: something has to be there to drop a
+         * file onto, and a delete that silently does nothing is worse than a
+         * button that says it cannot. */
+        int sameKind = 0;
+        for (const Track &x : a.proj.tracks)
+            if (x.kind == t.kind) sameKind++;
+
+        if (sn_icon_button(&ui, id + 5, b4, SN_I_TRASH, sameKind > 1, 0,
+                           sameKind > 1 ? "delete this track and everything on it"
+                                        : "the last track of its kind stays") &&
+            sameKind > 1) {
+            const std::string nm = t.name;
+            removeTrack(a.proj, (int)i);
+            a.clearSel();
+            a.changed();
+            a.say("deleted %s", nm.c_str());
+            break;   /* the vector moved under us */
+        }
     }
+
+    EndScissorMode();
 }
 
 /* ------------------------------------------------------------------ *
@@ -341,6 +452,11 @@ void timelinePane(App &a, Rectangle r)
                 zoomTo(a, a.timeAt(m.x), a.zoom * (w > 0 ? 1.25 : 0.8));
             } else if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
                 zoomTo(a, a.timeAt(m.x), a.zoom * (w > 0 ? 1.25 : 0.8));
+            } else if (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT) ||
+                       m.x < r.x + HEAD_W) {
+                /* Over the heads, or with Alt held: the wheel moves the track
+                 * list rather than time. */
+                a.trackScroll -= w * 40.0f;
             } else {
                 a.scroll -= w * 60.0 / a.zoom;
                 if (a.scroll < 0) a.scroll = 0;
@@ -356,7 +472,12 @@ void timelinePane(App &a, Rectangle r)
         }
     }
 
-    /* --- lanes --- */
+    /* --- lanes ---
+     *
+     * Clipped, because with a scrolled list the first track can be halfway
+     * under the ruler and the last one halfway off the bottom. */
+    BeginScissorMode((int)r.x, (int)(r.y + RULER_H + 1), (int)r.width,
+                     (int)std::max(0.0f, tracks_room(a)));
     for (size_t i = 0; i < a.proj.tracks.size(); i++) {
         Rectangle l = lane_rect(a, (int)i);
         if (l.y > r.y + r.height) break;
@@ -368,6 +489,8 @@ void timelinePane(App &a, Rectangle r)
                 DrawLineEx(Vector2{x, l.y}, Vector2{x + l.height, l.y + l.height}, 1,
                            Color{0x2a, 0x3a, 0x1e, 60});
     }
+
+    EndScissorMode();
 
     /* Second-lines down the lanes, so a clip's length is readable against
      * something. */
@@ -417,7 +540,43 @@ void timelinePane(App &a, Rectangle r)
         }
     }
 
+    /* --- what the pointer will do here, said with its shape ---
+     *
+     * The shape is the only part of a drag that is discoverable before you
+     * commit to it: the edge of a clip looks exactly like the middle of one
+     * until the cursor changes. */
+    if (inside) {
+        switch (overWhat) {
+        case DRAG_TRIM_IN:
+        case DRAG_TRIM_OUT:
+        case DRAG_FADE_IN:
+        case DRAG_FADE_OUT: sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW); break;
+        case DRAG_GAIN:     sn_cursor(&ui, MOUSE_CURSOR_RESIZE_NS); break;
+        case DRAG_CLIP:     sn_cursor(&ui, MOUSE_CURSOR_RESIZE_ALL); break;
+        default:
+            /* The ruler scrubs, and so does empty timeline. */
+            if (m.x > r.x + HEAD_W) sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW);
+            break;
+        }
+    }
+
+    /* A drag already in progress keeps its shape wherever the pointer has
+     * wandered to, which is what tells you it is still holding on. */
+    switch (a.drag) {
+    case DRAG_TRIM_IN:
+    case DRAG_TRIM_OUT:
+    case DRAG_FADE_IN:
+    case DRAG_FADE_OUT:
+    case DRAG_SCRUB:    sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW); break;
+    case DRAG_GAIN:     sn_cursor(&ui, MOUSE_CURSOR_RESIZE_NS); break;
+    case DRAG_CLIP:
+    case DRAG_FROM_BIN: sn_cursor(&ui, MOUSE_CURSOR_RESIZE_ALL); break;
+    default: break;
+    }
+
     /* --- clips --- */
+    BeginScissorMode((int)r.x, (int)(r.y + RULER_H + 1), (int)r.width,
+                     (int)std::max(0.0f, tracks_room(a)));
     for (size_t i = 0; i < a.proj.tracks.size(); i++) {
         const Track &t = a.proj.tracks[i];
         if (lane_rect(a, (int)i).y > r.y + r.height) break;
@@ -425,9 +584,10 @@ void timelinePane(App &a, Rectangle r)
             draw_clip(a, (int)i, c, t.kind == TRACK_VIDEO,
                       overClip.track == (int)i && overClip.clip == c.id);
     }
+    EndScissorMode();
 
-    draw_heads(a);
     draw_ruler(a, r);
+    draw_heads(a);
 
     /* --- starting a drag --- */
     if (inside && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && a.drag == DRAG_NONE) {
@@ -560,10 +720,111 @@ void timelinePane(App &a, Rectangle r)
 
     /* --- right-click --- */
     if (inside && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && overClip.ok()) {
+        const Clip *rc = a.proj.clip(overClip);
+        const bool linked = rc && rc->link != 0;
+
+        /* The last item changes with what is under the pointer, and it is
+         * last so the handler can find it by position. */
+        static const char *items[8];
+        static char linkItem[64];
+        int n = 0;
+        items[n++] = "split here";
+        items[n++] = "delete";
+        items[n++] = "delete and close the gap";
+        items[n++] = "-";
+        items[n++] = "mute";
+        items[n++] = "clear fades";
+
+        if (linked) {
+            snprintf(linkItem, sizeof linkItem, "unlink from its %s",
+                     a.proj.tracks[overClip.track].kind == TRACK_VIDEO ? "audio"
+                                                                       : "video");
+            items[n++] = linkItem;
+        }
+
         a.select(overClip, false);
-        static const char *items[] = {"split here", "delete", "delete and close the gap",
-                                      "-", "mute", "clear fades"};
-        sn_menu_open(&ui, m, items, 6, 100);
+        sn_menu_open(&ui, m, items, n, 100);
+    }
+
+    /* --- the bars ---
+     *
+     * A wheel and a middle-drag were the only way to know where you were in a
+     * long timeline, and neither of them shows you. A bar is the one control
+     * that answers "how much is there and where am I in it" without being
+     * touched.
+     * ------------------------------------------------------------------ */
+    {
+        const float lanesX = r.x + HEAD_W;
+        const float lanesW = r.width - HEAD_W - SCROLL_W;
+
+        /* --- along the bottom: time --- */
+        const double visible = lanesW / a.zoom;
+        const double content = std::max(a.proj.duration() + visible * 0.25, visible);
+
+        Rectangle track = {lanesX, r.y + r.height - SCROLL_W, lanesW, SCROLL_W - 2};
+        DrawRectangleRec(track, SN_WELL);
+
+        const float frac = (float)std::min(1.0, visible / content);
+        const float thumbW = std::max(28.0f, track.width * frac);
+        const float span = track.width - thumbW;
+        const float at = content > visible
+                             ? (float)(a.scroll / (content - visible)) : 0.0f;
+
+        Rectangle thumb = {track.x + span * std::min(1.0f, std::max(0.0f, at)),
+                           track.y + 1, thumbW, track.height - 2};
+
+        const bool hotH = CheckCollisionPointRec(m, track) && !sn_ui_blocked(&ui);
+        if (hotH || ui.active == 4001) sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW);
+
+        if (hotH && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            ui.active = 4001;
+            /* Clicking the trough jumps there; clicking the thumb grabs it
+             * where it was held, so it does not leap under the pointer. */
+            a.dragGrab = CheckCollisionPointRec(m, thumb) ? (m.x - thumb.x) : thumbW * 0.5;
+            a.follow = false;
+        }
+        if (ui.active == 4001 && span > 0) {
+            const float want = (m.x - (float)a.dragGrab - track.x) / span;
+            a.scroll = std::max(0.0, std::min(1.0f, std::max(0.0f, want)) *
+                                         (content - visible));
+        }
+
+        DrawRectangleRounded(thumb, 0.4f, 4,
+                             (hotH || ui.active == 4001) ? SN_DIM : SN_EDGE);
+
+        /* --- down the right: tracks, but only when there are too many --- */
+        const float want = tracks_height(a), room = tracks_room(a);
+        Rectangle vt = {r.x + r.width - SCROLL_W, r.y + RULER_H + 1, SCROLL_W - 2, room};
+
+        if (want > room) {
+            DrawRectangleRec(vt, SN_WELL);
+
+            const float th = std::max(24.0f, vt.height * (room / want));
+            const float vspan = vt.height - th;
+            const float vat = a.trackScroll / (want - room);
+
+            Rectangle vthumb = {vt.x + 1, vt.y + vspan * std::min(1.0f, std::max(0.0f, vat)),
+                                vt.width - 2, th};
+
+            const bool hotV = CheckCollisionPointRec(m, vt) && !sn_ui_blocked(&ui);
+            if (hotV || ui.active == 4002) sn_cursor(&ui, MOUSE_CURSOR_RESIZE_NS);
+
+            if (hotV && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                ui.active = 4002;
+                a.dragGrab = CheckCollisionPointRec(m, vthumb) ? (m.y - vthumb.y) : th * 0.5;
+            }
+            if (ui.active == 4002 && vspan > 0) {
+                const float w2 = (m.y - (float)a.dragGrab - vt.y) / vspan;
+                a.trackScroll = std::min(1.0f, std::max(0.0f, w2)) * (want - room);
+            }
+
+            DrawRectangleRounded(vthumb, 0.4f, 4,
+                                 (hotV || ui.active == 4002) ? SN_DIM : SN_EDGE);
+        } else {
+            a.trackScroll = 0;
+        }
+
+        a.trackScroll = std::max(0.0f, std::min(a.trackScroll, std::max(0.0f, want - room)));
     }
 
     /* --- the playhead, over everything --- */

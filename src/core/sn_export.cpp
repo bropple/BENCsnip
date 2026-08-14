@@ -108,6 +108,65 @@ bool canStreamCopy(const Project &p, const ExportSettings &s, std::string *why)
     return true;
 }
 
+int64_t estimateSize(const Project &p, const ExportSettings &s, bool *exact)
+{
+    if (exact) *exact = false;
+
+    const double to = s.to < 0 ? p.duration() : s.to;
+    const double span = std::max(0.0, to - s.from);
+    if (span <= 0) return 0;
+
+    /* A copy writes the packets it reads, so the size is the source's own
+     * bitrate over the range. Which is a division rather than a guess. */
+    std::string why;
+    if (canStreamCopy(p, s, &why)) {
+        std::vector<const Clip *> cl = all_clips(p);
+        const BinItem *b = cl.empty() ? nullptr : p.item(cl[0]->source);
+        if (b && b->info.bytes > 0 && b->info.duration > 0) {
+            if (exact) *exact = true;
+            return (int64_t)(b->info.bytes * (span / b->info.duration));
+        }
+    }
+
+    int64_t bits = 0;
+
+    bool anyVideo = false, anyAudio = false;
+    for (const Track &t : p.tracks)
+        for (const Clip &c : t.clips) {
+            const BinItem *b = p.item(c.source);
+            if (!b) continue;
+            if (t.kind == TRACK_VIDEO && b->info.hasVideo) anyVideo = true;
+            if (t.kind == TRACK_AUDIO && b->info.hasAudio) anyAudio = true;
+        }
+
+    if (anyVideo && !s.vcodec.empty() && s.vcodec != "none") {
+        if (s.vbitrate > 0) {
+            bits += (int64_t)(s.vbitrate * span);
+        } else {
+            /* Bits per pixel, at the quality asked for. crf 23 on ordinary
+             * 1080p footage lands near 0.10 bpp; each six points of crf is
+             * roughly a halving, which is the rule of thumb the encoder's own
+             * documentation gives and is close enough for a number labelled
+             * "about". */
+            const double bpp = 0.10 * std::pow(2.0, (23.0 - s.crf) / 6.0);
+            const double px = (double)s.width * s.height * (s.fps > 0 ? s.fps : 30.0);
+            bits += (int64_t)(px * bpp * span);
+        }
+    }
+
+    if (anyAudio && !s.acodec.empty() && s.acodec != "none") {
+        /* pcm is not compressed and does not care what bitrate was asked
+         * for: it is the sample rate times the width times the channels. */
+        const bool pcm = s.acodec.compare(0, 3, "pcm") == 0;
+        const int64_t rate = pcm ? (int64_t)RATE * 16 * CHANS : s.abitrate;
+        bits += (int64_t)(rate * span);
+    }
+
+    /* Container overhead: a few per cent for mp4 and mkv, and it is better to
+     * be a little over than a little under. */
+    return (int64_t)(bits / 8.0 * 1.02);
+}
+
 static bool stream_copy(const Project &p, const ExportSettings &s, ExportStatus *st)
 {
     std::vector<const Clip *> cl = all_clips(p);

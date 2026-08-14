@@ -32,6 +32,19 @@ Clip *Track::at(double t)
     return const_cast<Clip *>(static_cast<const Track *>(this)->at(t));
 }
 
+bool Track::transformed() const
+{
+    return std::fabs(scale - 1.0) > 1e-6 || std::fabs(x) > 1e-6 || std::fabs(y) > 1e-6 ||
+           cropL > 1e-6 || cropR > 1e-6 || cropT > 1e-6 || cropB > 1e-6;
+}
+
+void Track::resetTransform()
+{
+    scale = 1.0;
+    x = y = 0.0;
+    cropL = cropR = cropT = cropB = 0.0;
+}
+
 const BinItem *Project::item(int id) const
 {
     for (const BinItem &b : bin)
@@ -121,6 +134,89 @@ int Project::freeTrack(TrackKind k, double a, double b)
     }
     tracks.insert(tracks.begin() + insert, t);
     return (int)insert;
+}
+
+/* ------------------------------------------------------------------ *
+ * Tracks
+ * ------------------------------------------------------------------ */
+
+/* Video above audio, always. Given a wanted position, this is the nearest one
+ * that does not put a video track under an audio one. */
+static int clamp_into_kind(const Project &p, TrackKind kind, int want)
+{
+    int first = 0, last = 0;
+    for (size_t i = 0; i < p.tracks.size(); i++) {
+        if (p.tracks[i].kind == kind) { first = (int)i; break; }
+        first = (int)i + 1;
+    }
+    last = first;
+    for (size_t i = first; i < p.tracks.size(); i++) {
+        if (p.tracks[i].kind != kind) break;
+        last = (int)i + 1;
+    }
+
+    if (want < first) return first;
+    if (want > last) return last;
+    return want;
+}
+
+int addTrack(Project &p, TrackKind kind, int atIndex)
+{
+    Track t;
+    t.id = p.newId();
+    t.kind = kind;
+
+    /* Numbered by how many of its kind there are, not by position, so adding
+     * one in the middle does not renumber the others under someone's cursor. */
+    int n = 0;
+    for (const Track &x : p.tracks)
+        if (x.kind == kind) n++;
+    t.name = (kind == TRACK_VIDEO ? "V" : "A") + std::to_string(n + 1);
+
+    int at = atIndex;
+    if (at < 0) {
+        /* A new video track goes at the top, which is the back of the
+         * picture: whatever is already there stays in front of it, which is
+         * what you want when you are adding a background. A new audio track
+         * goes at the bottom, where there is nothing to be in front of. */
+        at = kind == TRACK_VIDEO ? 0 : (int)p.tracks.size();
+    }
+    at = clamp_into_kind(p, kind, at);
+
+    p.tracks.insert(p.tracks.begin() + at, t);
+    p.dirty = true;
+    return at;
+}
+
+bool removeTrack(Project &p, int idx)
+{
+    const Track *t = p.track(idx);
+    if (!t) return false;
+
+    /* Something has to be left to drop a file onto. */
+    int n = 0;
+    for (const Track &x : p.tracks)
+        if (x.kind == t->kind) n++;
+    if (n < 2) return false;
+
+    p.tracks.erase(p.tracks.begin() + idx);
+    p.dirty = true;
+    return true;
+}
+
+int moveTrack(Project &p, int idx, int delta)
+{
+    if (idx < 0 || idx >= (int)p.tracks.size() || delta == 0) return idx;
+
+    const int to = idx + (delta > 0 ? 1 : -1);
+    if (to < 0 || to >= (int)p.tracks.size()) return idx;
+    /* Only past its own kind: swapping a video track with an audio one would
+     * shuffle the two halves of the list together. */
+    if (p.tracks[to].kind != p.tracks[idx].kind) return idx;
+
+    std::swap(p.tracks[idx], p.tracks[to]);
+    p.dirty = true;
+    return to;
 }
 
 Project newProject()

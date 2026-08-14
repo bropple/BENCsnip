@@ -55,6 +55,18 @@ link id move, trim and delete as one, and selecting one selects both. A split
 gives the two halves new link ids of their own, because after a cut they are
 separate clips and dragging one should not drag the other.
 
+A video track also carries where its picture goes: `scale`, `x`, `y` and four
+crop fractions, all relative to the canvas rather than in pixels, so changing
+the project's size moves nothing. It is per track rather than per clip because
+what it is for is a layout — a small video in the corner of a big one, two
+side by side — and a layout that changed halfway through a track would be a
+different feature with a different interface.
+
+The order of the video tracks is the compositing order, and **the top row is
+the back**. That is the opposite of the convention every other editor uses; it
+is what this one was asked for, and the only defence against the surprise is
+that the reorder buttons say which direction is which.
+
 Each track's clips are kept sorted by `pos` and never overlap. Dropping a clip
 on top of another cuts a hole in the one underneath rather than layering — that
 is what dragging one clip onto another visibly means, and it is what
@@ -97,8 +109,22 @@ like at time `t` — and both the preview and the exporter ask it. That is the
 whole reason the file exists: the usual way an export comes out different from
 the preview is two pieces of code that both know how fades work.
 
-Video composites bottom track to top over opaque black, each layer scaled to
-fit and letterboxed, blended by its fade. Audio sums every unmuted audio clip
+Video composites first track to last over opaque black — first is the top row,
+which is the back. Each layer is cropped, then fitted into its scaled box,
+then placed by `x` and `y` in whatever space is left over, then blended by its
+fade. The crop is taken first because it changes the shape that gets fitted: a
+16:9 source cropped to its middle third is a 16:3 layer, and fitting the
+uncropped aspect and cutting afterwards would leave it the wrong size and off
+centre. The decoder is asked for whatever size makes the *kept* part come out
+at the fitted size, so swscale does the scaling and the crop is a
+sub-rectangle rather than a second resample.
+
+The preview asks for the canvas at the canvas's own aspect, not at the shape
+of the pane it is drawn in. That did not matter while every layer filled the
+frame — one picture fitted into any box looks the same — and it matters
+completely now: the right half of a 16:9 project is not the right half of a
+3:1 pane, and a side-by-side layout would preview as something the export
+would never produce. Audio sums every unmuted audio clip
 under the block, with fades evaluated per sample — a fade shorter than a block
 would otherwise be a step, and a step in a gain is a click — then clips to
 ±1.0, so an overloaded mix sounds overloaded rather than broken.

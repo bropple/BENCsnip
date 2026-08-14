@@ -70,6 +70,19 @@ bool exportTimeline(const Project &p, const ExportSettings &s, ExportStatus *st)
  * so rather than silently doing the slow thing. */
 bool canStreamCopy(const Project &p, const ExportSettings &s, std::string *why);
 
+/* Roughly how big the output will be, in bytes.
+ *
+ * Exact for a stream copy, because the packets that will be written are the
+ * packets that are already there. A guess for anything else, and it says so:
+ * the whole point of constant-quality encoding is that the encoder decides
+ * the bitrate from the picture, and nothing can know that in advance without
+ * doing the work. The guess is a bits-per-pixel figure that x264 lands near
+ * for ordinary footage, scaled by the quality setting.
+ *
+ * `exact` says which kind of answer this is, so the interface can say "about"
+ * when it means about. */
+int64_t estimateSize(const Project &p, const ExportSettings &s, bool *exact);
+
 } /* namespace sn */
 
 #endif /* SN_EXPORT_H */

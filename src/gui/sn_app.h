@@ -46,6 +46,8 @@ enum DragKind {
 enum Modal {
     MODAL_NONE = 0,
     MODAL_EXPORT,
+    MODAL_LAYOUT,     /* one track's size, position and crop        */
+    MODAL_CANVAS,     /* the project's own size and frame rate      */
     MODAL_INFO,
     MODAL_OPEN,       /* the file browser, importing            */
     MODAL_SAVE,
@@ -75,6 +77,7 @@ struct App {
     /* --- the timeline view --- */
     double zoom = 60.0;        /* pixels per second                      */
     double scroll = 0.0;       /* seconds at the left edge               */
+    float trackScroll = 0.0f;  /* pixels the track list is scrolled down */
     double playhead = 0.0;
     bool snapping = true;
     bool follow = true;        /* scroll to keep the playhead in view    */
@@ -105,6 +108,13 @@ struct App {
     ExportSettings ex;
     ExportStatus exStatus;
     std::unique_ptr<std::thread> exThread;
+
+    /* Which track the layout window is about. */
+    int layoutTrack = -1;
+
+    /* --- the title in the toolbar --- */
+    bool renaming = false;
+    std::string renameText;
 
     /* --- the status line --- */
     std::string status;
@@ -150,7 +160,12 @@ const char *tarrLine(int which);
 
 /* --- modals --- */
 void exportDialog(App &a);
+void layoutDialog(App &a);          /* one track's size, position and crop */
+void canvasDialog(App &a);          /* the project's own size and rate     */
 void exportDialogPrepare(App &a);   /* call as the dialog opens */
+/* The project was renamed: the suggested output filename follows it, unless
+ * the person has already typed one of their own. */
+void exportRenamed(App &a);
 void infoWindow(App &a);
 void confirmDialog(App &a);
 void startExport(App &a);

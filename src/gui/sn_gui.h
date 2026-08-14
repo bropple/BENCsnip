@@ -103,6 +103,12 @@ typedef struct sn_ui {
     /* One line of help, published by whatever the pointer is over and drawn
      * at the bottom of the window. Cleared every frame. */
     char tip[160];
+
+    /* And the pointer itself. Panes ask for a shape; the window sets it once
+     * at the end of the frame. Asking raylib directly from each pane means
+     * whichever drew last wins, which is a cursor that flickers between two
+     * shapes depending on paint order. */
+    int cursor;
 } sn_ui;
 
 void sn_ui_init(sn_ui *ui);
@@ -113,6 +119,11 @@ void sn_ui_overlay(sn_ui *ui);     /* call last: menus draw here         */
 int sn_ui_blocked(const sn_ui *ui);
 int sn_double_click(sn_ui *ui, int id);
 void sn_tip(sn_ui *ui, const char *fmt, ...);
+
+/* What the pointer should look like here. The most specific request in a
+ * frame wins: a resize beats a move beats a hand beats the arrow, because
+ * they are asked for in that order by things that overlap. */
+void sn_cursor(sn_ui *ui, int shape);
 
 /* ------------------------------------------------------------------ *
  * Text
@@ -145,7 +156,8 @@ typedef enum {
     SN_I_SPLIT, SN_I_TRASH, SN_I_PLUS, SN_I_MINUS, SN_I_FOLDER, SN_I_SAVE,
     SN_I_EXPORT, SN_I_UNDO, SN_I_REDO, SN_I_EYE, SN_I_EYE_OFF, SN_I_SPEAKER,
     SN_I_MUTE, SN_I_LOCK, SN_I_UNLOCK, SN_I_ZOOM_IN, SN_I_ZOOM_OUT, SN_I_FIT,
-    SN_I_LINK, SN_I_INFO, SN_I_X, SN_I_CHECK, SN_I_SNAP
+    SN_I_LINK, SN_I_UNLINK, SN_I_INFO, SN_I_X, SN_I_CHECK, SN_I_SNAP,
+    SN_I_UP, SN_I_DOWN, SN_I_CROP
 } sn_icon;
 
 void sn_draw_icon(sn_icon which, Rectangle r, Color c);

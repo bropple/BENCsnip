@@ -54,15 +54,30 @@ middle piece and press **Shift+Delete**. Then **Ctrl+E**.
   timeline. Portrait video from a phone comes in the right way up, because the
   display matrix is read rather than ignored.
 * **A timeline that behaves.** Drag clips to move them, drag their edges to
-  trim, drag the corner handles to fade. Snapping to cuts and to the playhead,
-  which can be turned off. Video and its audio are linked and move together
-  until you split them apart.
+  trim, drag the corner handles to fade. The pointer changes shape over
+  anything draggable, so what a drag will do is visible before you commit to
+  it. Snapping to cuts and to the playhead, which can be turned off. Video and
+  its audio are linked and move together until you split them apart, or right-
+  click and unlink them.
+* **As many tracks as you want.** `+V` and `+A` above the track heads; move
+  them up and down, hide, mute, lock or delete them. Every video track plays
+  at once — **the top row is the back of the picture and the bottom row is in
+  front**, which is upside down compared to most editors and is what this one
+  was asked for.
+* **A layout per video track.** Size, position and crop, relative to the
+  canvas, so a small video can play in the corner of a big one or two can sit
+  side by side. There are presets for the layouts anyone actually wants. The
+  canvas itself — size and frame rate — is a button in the toolbar, so a
+  vertical or square project is two clicks.
 * **A preview that stays in sync.** The picture is chosen to match how much
   sound the audio device has actually played, so a slow decode drops a frame
   rather than sliding the sound away from the picture.
 * **Export that is honest about what it is doing.** The dialog tells you
   whether it is going to re-encode the whole timeline or copy the packets
-  across untouched — and it copies whenever it can.
+  across untouched — and it copies whenever it can. It also says how big the
+  result will be: exactly, for a copy, and "about" for a render, because at
+  constant quality the encoder decides the bitrate from the picture and
+  nothing can know that in advance without doing the work.
 * **Undo everything**, two hundred steps deep.
 
 ### The fast trim
@@ -114,9 +129,12 @@ exactly what the preview showed you, because both go through the same code.
 The mouse: click a clip to select it, drag the middle to move it, drag either
 edge to trim it, drag the small square in a top corner to make a fade, and
 drag the line across an audio clip to change its level — it snaps back to 0 dB
-on the way past. The ruler scrubs. The wheel scrolls; Ctrl or Shift with it
-zooms; the middle button pans. Right-click a clip for the rest. Delete with
-nothing selected closes the gap the playhead is sitting in.
+on the way past. The pointer's shape says which of those you are about to do.
+The ruler scrubs. The wheel scrolls; Ctrl or Shift with it zooms; Alt with it,
+or the wheel over the track heads, scrolls the tracks; the middle button pans.
+There are scrollbars for both. Right-click a clip for the rest. Delete with
+nothing selected closes the gap the playhead is sitting in. Double-click the
+project's name in the toolbar to change it — the export is named after it.
 
 ---
 

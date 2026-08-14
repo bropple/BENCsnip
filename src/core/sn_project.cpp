@@ -124,6 +124,14 @@ bool saveProject(const Project &p, const std::string &path, std::string *err)
     for (const Track &t : p.tracks) {
         fprintf(f, "track %d %d %d %d %d %s\n", t.id, (int)t.kind, t.muted ? 1 : 0,
                 t.locked ? 1 : 0, t.height, t.name.c_str());
+
+        /* Its own line rather than more fields on the track line, and only
+         * when there is something to say. A reader that predates this skips
+         * a line it does not recognise; one that had to parse four more
+         * numbers before the track's name would read the name as a number. */
+        if (t.transformed())
+            fprintf(f, "xform %.6f %.6f %.6f %.6f %.6f %.6f %.6f\n", t.scale, t.x, t.y,
+                    t.cropL, t.cropR, t.cropT, t.cropB);
         for (const Clip &c : t.clips)
             fprintf(f, "clip %d %d %d %.6f %.6f %.6f %.4f %.4f %.4f %d\n",
                     c.id, c.source, c.link, c.in, c.out, c.pos, c.gain,
@@ -214,6 +222,11 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
             t.name = line + 6 + used;
             p.tracks.push_back(t);
             trackAt = (int)p.tracks.size() - 1;
+        } else if (!strncmp(line, "xform ", 6)) {
+            if (trackAt < 0) continue;
+            Track &t = p.tracks[trackAt];
+            sscanf(line + 6, "%lf %lf %lf %lf %lf %lf %lf", &t.scale, &t.x, &t.y,
+                   &t.cropL, &t.cropR, &t.cropT, &t.cropB);
         } else if (!strncmp(line, "clip ", 5)) {
             if (trackAt < 0) continue;
             Clip c;

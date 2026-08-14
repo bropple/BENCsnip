@@ -428,6 +428,9 @@ void exportDialog(App &a)
     std::string why;
     const bool fast = canStreamCopy(a.proj, a.ex, &why);
 
+    bool exact = false;
+    const int64_t guess = estimateSize(a.proj, a.ex, &exact);
+
     Rectangle note = {r.x + 16, r.y + r.height - 78, r.width - 32, 30};
     sn_panel(note, SN_WELL, SN_BORDER);
     if (fast) {
@@ -444,6 +447,18 @@ void exportDialog(App &a)
         sn_text(&ui, SN_F_TINY, l1, note.x + 8, note.y + 16, SN_DIM);
     }
 
+    /* The size, on the right of the same panel. "about" is doing real work
+     * there: at constant quality the encoder decides the bitrate from the
+     * picture, and a still frame and a snowstorm at the same setting are not
+     * the same file. A copy is exact, and says so by not saying about. */
+    {
+        char sz[64];
+        snprintf(sz, sizeof sz, "%s%s", exact ? "" : "about ", fmtSize(guess).c_str());
+        const float w = sn_measure(&ui, SN_F_SMALL, sz, 0.0f);
+        sn_text(&ui, SN_F_SMALL, sz, note.x + note.width - w - 10, note.y + 8,
+                exact ? SN_ACCENT : SN_TEXT);
+    }
+
     /* --- go --- */
     const bool ready = !g_path.empty() && a.proj.duration() > 0;
     Rectangle go = {r.x + r.width - 200, r.y + r.height - 40, 88, 26};
@@ -456,6 +471,15 @@ void exportDialog(App &a)
 
 /* Called once, when the dialog opens, so the path field starts somewhere
  * sensible without overwriting what the user typed last time. */
+void exportRenamed(App &a)
+{
+    /* A filename someone typed is theirs; a suggested one is ours to keep up
+     * to date. */
+    if (g_pathEdited) return;
+    g_path.clear();
+    exportDialogPrepare(a);
+}
+
 void exportDialogPrepare(App &a)
 {
     /* Land on something this build can actually write. */
@@ -491,6 +515,253 @@ void exportDialogPrepare(App &a)
         if (s != std::string::npos) dir = a.proj.path.substr(0, s);
     }
     g_path = dir + "/" + base + "." + PRESETS[g_preset].ext;
+}
+
+
+/* ------------------------------------------------------------------ *
+ * One track's layout
+ *
+ * Size, position and crop, per video track, which is what makes a small
+ * video inside a big one or two side by side. Everything is relative to the
+ * canvas, so changing the project's size later moves nothing.
+ *
+ * The window draws what it is describing, at the canvas's own aspect, with
+ * this track's rectangle in it. Four numbers and a preview beats four numbers.
+ * ------------------------------------------------------------------ */
+
+void layoutDialog(App &a)
+{
+    sn_ui &ui = a.ui;
+
+    Track *t = a.proj.track(a.layoutTrack);
+    if (!t) { a.modal = MODAL_NONE; return; }
+
+    Rectangle r = modal_frame(a, "TRACK LAYOUT", 560, 520);
+
+    sn_text_spaced(&ui, SN_F_SMALL, t->name.c_str(), r.x + 16, r.y + 38, SN_ACCENT);
+    sn_text(&ui, SN_F_TINY,
+            "size, position and crop, relative to the canvas. The export uses the "
+            "same numbers.",
+            r.x + 56, r.y + 40, SN_DIM);
+
+    /* --- the picture of it --- */
+    const double car = a.proj.height > 0 ? (double)a.proj.width / a.proj.height : 16.0 / 9.0;
+    float pw = 280, ph = (float)(280 / car);
+    if (ph > 170) { ph = 170; pw = (float)(170 * car); }
+
+    Rectangle canvas = {r.x + (560 - pw) * 0.5f, r.y + 66, pw, ph};
+    DrawRectangleRec(canvas, SN_BG);
+    DrawRectangleLinesEx(canvas, 1, SN_BORDER);
+
+    /* The layer, worked out the same way the renderer works it out - crop
+     * first, because it changes the shape that gets fitted. */
+    {
+        const double keepX = std::max(0.02, 1.0 - t->cropL - t->cropR);
+        const double keepY = std::max(0.02, 1.0 - t->cropT - t->cropB);
+
+        double sw = 16, sh = 9;
+        for (const Clip &c : t->clips) {
+            const BinItem *b = a.proj.item(c.source);
+            if (b && b->info.hasVideo) { sw = b->info.dispW(); sh = b->info.dispH(); break; }
+        }
+        sw *= keepX;
+        sh *= keepY;
+
+        const double sc = std::max(0.01, t->scale);
+        const double boxW = pw * sc, boxH = ph * sc;
+        const double sa = sw / sh, ba = boxW / boxH;
+
+        double lw = sa > ba ? boxW : boxH * sa;
+        double lh = sa > ba ? boxW / sa : boxH;
+
+        const double ox = (pw - lw) * 0.5 * (1.0 + t->x);
+        const double oy = (ph - lh) * 0.5 * (1.0 + t->y);
+
+        Rectangle layer = {canvas.x + (float)ox, canvas.y + (float)oy, (float)lw,
+                           (float)lh};
+        DrawRectangleRec(layer, Color{0x2d, 0x5c, 0x8c, 200});
+        DrawRectangleLinesEx(layer, 1, SN_ACCENT);
+        sn_text_center(&ui, SN_F_TINY, t->name.c_str(), layer.x + layer.width * 0.5f,
+                       layer.y + layer.height * 0.5f - 6, SN_TEXT);
+    }
+
+    /* --- the numbers --- */
+    float y = canvas.y + ph + 16;
+
+    struct Row {
+        const char *label;
+        double *v;
+        double lo, hi;
+        const char *hint;
+    } rows[] = {
+        {"SIZE", &t->scale, 0.05, 2.0, "1 fills the canvas"},
+        {"LEFT / RIGHT", &t->x, -1.0, 1.0, "-1 left edge, +1 right edge"},
+        {"UP / DOWN", &t->y, -1.0, 1.0, "-1 top, +1 bottom"},
+    };
+
+    for (int i = 0; i < 3; i++) {
+        label(a, rows[i].label, r.x + 16, y);
+
+        Rectangle sl = {r.x + 130, y - 4, 260, 16};
+        float v = (float)((*rows[i].v - rows[i].lo) / (rows[i].hi - rows[i].lo));
+        if (sn_slider(&ui, 8720 + i, sl, &v)) {
+            *rows[i].v = rows[i].lo + v * (rows[i].hi - rows[i].lo);
+            a.changed(true);
+        }
+
+        char num[32];
+        snprintf(num, sizeof num, "%+.2f", *rows[i].v);
+        sn_text(&ui, SN_F_TINY, num, sl.x + sl.width + 10, y - 2, SN_TEXT);
+        sn_text(&ui, SN_F_TINY, rows[i].hint, r.x + 16, y + 12, SN_EDGE);
+        y += 34;
+    }
+
+    /* Crop, as four numbers on one line: it is one idea, not four. */
+    label(a, "CROP  L R T B", r.x + 16, y);
+    double *crops[] = {&t->cropL, &t->cropR, &t->cropT, &t->cropB};
+    for (int i = 0; i < 4; i++) {
+        Rectangle sl = {r.x + 130 + i * 68.0f, y - 4, 56, 16};
+        float v = (float)*crops[i];
+        if (sn_slider(&ui, 8730 + i, sl, &v)) {
+            /* Two opposite crops that meet would leave nothing to draw. */
+            double other = (i < 2) ? *crops[i ^ 1] : *crops[(i ^ 1)];
+            *crops[i] = std::min((double)v, 0.9 - other);
+            if (*crops[i] < 0) *crops[i] = 0;
+            a.changed(true);
+        }
+        char num[16];
+        snprintf(num, sizeof num, "%.2f", *crops[i]);
+        sn_text(&ui, SN_F_TINY, num, sl.x + 14, y + 12, SN_EDGE);
+    }
+    y += 40;
+
+    /* --- the two layouts anybody actually wants --- */
+    label(a, "OR JUST", r.x + 16, y);
+    struct Preset {
+        const char *name;
+        double scale, x, y;
+    } presets[] = {
+        {"FULL", 1.0, 0.0, 0.0},   {"LEFT HALF", 0.5, -1.0, 0.0},
+        {"RIGHT HALF", 0.5, 1.0, 0.0}, {"CORNER", 0.32, 1.0, -1.0},
+    };
+    for (int i = 0; i < 4; i++) {
+        Rectangle b = {r.x + 130 + i * 96.0f, y - 6, 90, 22};
+        if (sn_button(&ui, 8740 + i, b, presets[i].name, 1)) {
+            t->scale = presets[i].scale;
+            t->x = presets[i].x;
+            t->y = presets[i].y;
+            a.changed();
+        }
+    }
+
+    Rectangle reset = {r.x + 16, r.y + r.height - 40, 88, 26};
+    Rectangle close = {r.x + r.width - 104, r.y + r.height - 40, 88, 26};
+    if (sn_button(&ui, 8750, reset, "RESET", t->transformed())) {
+        t->resetTransform();
+        a.changed();
+    }
+    if (sn_button_lit(&ui, 8751, close, "DONE", 1) || IsKeyPressed(KEY_ESCAPE)) {
+        a.changed();
+        a.modal = MODAL_NONE;
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ * The canvas
+ *
+ * What the preview shows and what an export defaults to. It is set from the
+ * first video dropped in, which is right nearly always and wrong exactly when
+ * someone wants a shape none of their footage is - two videos side by side in
+ * a wide frame, or a phone-shaped crop out of landscape.
+ * ------------------------------------------------------------------ */
+
+void canvasDialog(App &a)
+{
+    sn_ui &ui = a.ui;
+    Rectangle r = modal_frame(a, "CANVAS", 520, 300);
+
+    static std::string wTxt, hTxt, fTxt;
+    static bool primed = false;
+    if (!primed) {
+        wTxt = std::to_string(a.proj.width);
+        hTxt = std::to_string(a.proj.height);
+        char f[32];
+        snprintf(f, sizeof f, "%.3f", a.proj.fps);
+        fTxt = f;
+        primed = true;
+    }
+
+    float y = r.y + 46;
+    label(a, "WIDTH", r.x + 16, y);
+    label(a, "HEIGHT", r.x + 150, y);
+    label(a, "FRAMES PER SECOND", r.x + 284, y);
+    y += 14;
+
+    sn_field(&ui, 8760, Rectangle{r.x + 16, y, 120, 24}, wTxt, "1920");
+    sn_field(&ui, 8761, Rectangle{r.x + 150, y, 120, 24}, hTxt, "1080");
+    sn_field(&ui, 8762, Rectangle{r.x + 284, y, 120, 24}, fTxt, "30");
+    y += 40;
+
+    label(a, "OR", r.x + 16, y);
+    y += 14;
+
+    struct Shape {
+        const char *name;
+        int w, h;
+    } shapes[] = {
+        {"1080P", 1920, 1080}, {"720P", 1280, 720},   {"4K", 3840, 2160},
+        {"VERTICAL", 1080, 1920}, {"SQUARE", 1080, 1080},
+    };
+    for (int i = 0; i < 5; i++) {
+        Rectangle b = {r.x + 16 + (i % 5) * 96.0f, y, 90, 24};
+        const bool on = a.proj.width == shapes[i].w && a.proj.height == shapes[i].h;
+        if (sn_toggle(&ui, 8770 + i, b, shapes[i].name, on)) {
+            wTxt = std::to_string(shapes[i].w);
+            hTxt = std::to_string(shapes[i].h);
+        }
+    }
+    y += 40;
+
+    /* What it is now, next to what it would become - the numbers on their own
+     * do not say whether this is a change worth making. */
+    {
+        char now[128];
+        snprintf(now, sizeof now, "now %dx%d at %.3f fps", a.proj.width, a.proj.height,
+                 a.proj.fps);
+        sn_text(&ui, SN_F_TINY, now, r.x + 16, y, SN_DIM);
+        sn_text(&ui, SN_F_TINY,
+                "tracks keep their layout: a track on the left half stays on the left "
+                "half.",
+                r.x + 16, y + 16, SN_EDGE);
+    }
+
+    Rectangle ok = {r.x + r.width - 200, r.y + r.height - 40, 88, 26};
+    Rectangle no = {r.x + r.width - 104, r.y + r.height - 40, 88, 26};
+
+    if (sn_button_lit(&ui, 8780, ok, "APPLY", 1)) {
+        const int w = atoi(wTxt.c_str());
+        const int h = atoi(hTxt.c_str());
+        const double f = atof(fTxt.c_str());
+
+        /* Even, because every encoder that matters refuses odd dimensions -
+         * and refusing them here is a sentence, where refusing them at export
+         * time is a failure ten seconds after choosing a filename. */
+        if (w >= 16 && h >= 16 && w <= 16384 && h <= 16384 && f >= 1 && f <= 240) {
+            a.proj.width = w & ~1;
+            a.proj.height = h & ~1;
+            a.proj.fps = f;
+            a.changed();
+            a.say("canvas is %dx%d at %.3f fps", a.proj.width, a.proj.height, a.proj.fps);
+            primed = false;
+            a.modal = MODAL_NONE;
+        } else {
+            a.complain("that is not a size this can use - 16 to 16384, 1 to 240 fps");
+        }
+    }
+    if (sn_button(&ui, 8781, no, "CANCEL", 1) || IsKeyPressed(KEY_ESCAPE)) {
+        primed = false;
+        a.modal = MODAL_NONE;
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -567,7 +838,19 @@ void infoWindow(App &a)
         while (*p) {
             const char *nl = strchr(p, '\n');
             size_t n = nl ? (size_t)(nl - p) : strlen(p);
-            if (n >= sizeof line) n = sizeof line - 1;
+
+            /* The OFL ships with CRLF endings, and the carriage return is a
+             * codepoint the font has no glyph for - so every line of it drew
+             * with a question mark on the end. */
+            if (n && p[n - 1] == '\r') n--;
+
+            if (n >= sizeof line) {
+                n = sizeof line - 1;
+                /* Never cut through a UTF-8 sequence: the tail bytes of one
+                 * are not characters, and drawing them is the same question
+                 * mark by a different route. */
+                while (n && (p[n] & 0xC0) == 0x80) n--;
+            }
             memcpy(line, p, n);
             line[n] = 0;
             if (ly > body.y - 14 && ly < body.y + body.height)

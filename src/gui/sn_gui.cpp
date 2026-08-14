@@ -42,11 +42,44 @@ Color SN_CLIP_A_EDGE = {0x3f, 0x5c, 0x28, 255};
  * sn_embed.h for why, and NOTICE for the condition attached to it.
  * ------------------------------------------------------------------ */
 
+/* Which glyphs to rasterise.
+ *
+ * Passing null here loads raylib's default set - the 95 printable ASCII
+ * characters and nothing else - and this program shows text it did not write.
+ * A codepoint the atlas has no glyph for is drawn as a question mark, so the
+ * OFL appeared with one at the end of every line (it ships with CRLF endings)
+ * and the NOTICE with one wherever it had an em dash.
+ *
+ * The line endings are a separate bug, fixed where the text is split. This is
+ * the other half: ASCII, the Latin-1 supplement - accented names, the
+ * copyright sign, degrees - and the punctuation block holding the dashes, the
+ * curly quotes and the ellipsis. About three hundred glyphs, and Terminus has
+ * every one of them. */
+static const int *glyph_set(int *count)
+{
+    static int cps[512];
+    static int n = 0;
+
+    if (n == 0) {
+        for (int c = 0x20; c <= 0x7E; c++) cps[n++] = c;      /* ASCII      */
+        for (int c = 0xA0; c <= 0xFF; c++) cps[n++] = c;      /* Latin-1    */
+        for (int c = 0x2010; c <= 0x2027; c++) cps[n++] = c;  /* – — ' ' " " … */
+        cps[n++] = 0x20AC;                                    /* €          */
+        cps[n++] = 0x2122;                                    /* ™          */
+    }
+
+    *count = n;
+    return cps;
+}
+
 /* Point filtering, not bilinear. Terminus is a bitmap design; smoothing it is
  * how you get the mush this font exists to avoid. */
 static Font load_at(int size, int *found)
 {
-    Font f = LoadFontFromMemory(".ttf", SN_FONT_TTF, (int)SN_FONT_TTF_LEN, size, 0, 0);
+    int n = 0;
+    const int *cps = glyph_set(&n);
+    Font f = LoadFontFromMemory(".ttf", SN_FONT_TTF, (int)SN_FONT_TTF_LEN, size,
+                                (int *)cps, n);
     if (f.texture.id != 0 && f.glyphCount > 0) {
         SetTextureFilter(f.texture, TEXTURE_FILTER_POINT);
         *found = 1;
@@ -76,10 +109,31 @@ void sn_ui_free(sn_ui *ui)
     ui->loaded = 0;
 }
 
+/* Which shape wins when two things ask in the same frame. Higher is more
+ * specific: the edge of a clip is inside the clip, so both the resize and the
+ * move get asked for and the resize is the one that means something. */
+static int cursor_rank(int shape)
+{
+    switch (shape) {
+    case MOUSE_CURSOR_RESIZE_EW:
+    case MOUSE_CURSOR_RESIZE_NS: return 4;
+    case MOUSE_CURSOR_RESIZE_ALL: return 3;
+    case MOUSE_CURSOR_IBEAM: return 2;
+    case MOUSE_CURSOR_POINTING_HAND: return 1;
+    default: return 0;
+    }
+}
+
+void sn_cursor(sn_ui *ui, int shape)
+{
+    if (cursor_rank(shape) > cursor_rank(ui->cursor)) ui->cursor = shape;
+}
+
 void sn_ui_frame(sn_ui *ui)
 {
     ui->tip[0] = 0;
     ui->suppress = 0;
+    ui->cursor = MOUSE_CURSOR_DEFAULT;
     /* A drag ends when the button comes up, wherever the pointer is. Leaving
      * `active` set past the release is how a control ends up following the
      * mouse around with nothing held down. */
@@ -200,6 +254,8 @@ static int button_common(sn_ui *ui, int id, Rectangle r, const char *label,
     if (!enabled) f = SN_PANEL;
     else if (down) f = SN_EDGE;
     else if (hot) f = SN_PANEL_HI;
+
+    if (hot) sn_cursor(ui, MOUSE_CURSOR_POINTING_HAND);
 
     sn_panel(r, f, enabled ? SN_BORDER : SN_PANEL_HI);
 
@@ -383,8 +439,25 @@ void sn_draw_icon(sn_icon which, Rectangle r, Color c)
         tri(V(0.75f, 0.0f), V(0.35f, -0.25f), V(0.35f, 0.25f));
         break;
     case SN_I_LINK:
-        DrawRing(Vector2{cx - 0.3f * s, cy}, 0.35f * s, 0.35f * s + th * 0.7f, 0, 360, 20, c);
-        DrawRing(Vector2{cx + 0.3f * s, cy}, 0.35f * s, 0.35f * s + th * 0.7f, 0, 360, 20, c);
+    case SN_I_UNLINK:
+        DrawRing(Vector2{cx - 0.35f * s, cy}, 0.32f * s, 0.32f * s + th * 0.7f, 0, 360, 20, c);
+        DrawRing(Vector2{cx + 0.35f * s, cy}, 0.32f * s, 0.32f * s + th * 0.7f, 0, 360, 20, c);
+        if (which == SN_I_LINK) bar(-0.2f, -0.09f, 0.4f, 0.18f);
+        else line(-0.15f, -0.55f, 0.15f, 0.55f, th * 0.8f);
+        break;
+    case SN_I_UP:
+        tri(V(-0.6f, 0.35f), V(0.6f, 0.35f), V(0.0f, -0.45f));
+        break;
+    case SN_I_DOWN:
+        tri(V(-0.6f, -0.35f), V(0.6f, -0.35f), V(0.0f, 0.45f));
+        break;
+    case SN_I_CROP:
+        /* Two overlapping corners, which is what a crop tool has looked like
+         * since before any of this. */
+        bar(-0.75f, -0.35f, 0.2f, 1.1f);
+        bar(-0.75f, 0.55f, 1.5f, 0.2f);
+        bar(0.55f, -0.75f, 0.2f, 1.1f);
+        bar(-0.75f, -0.75f, 1.5f, 0.2f);
         break;
     case SN_I_INFO:
         DrawRing(Vector2{cx, cy}, 0.7f * s, 0.7f * s + th * 0.7f, 0, 360, 24, c);
@@ -420,6 +493,7 @@ int sn_icon_button(sn_ui *ui, int id, Rectangle r, sn_icon which, int enabled,
     else if (down) fill = SN_EDGE;
     else if (hot) fill = SN_PANEL_HI;
 
+    if (hot) sn_cursor(ui, MOUSE_CURSOR_POINTING_HAND);
     sn_panel(r, fill, enabled ? (hot || lit ? SN_ACCENT : SN_BORDER) : SN_PANEL_HI);
 
     Color ink = lit ? SN_BG : (enabled ? (hot ? SN_TEXT : SN_DIM) : SN_EDGE);
@@ -444,6 +518,7 @@ int sn_slider(sn_ui *ui, int id, Rectangle r, float *v)
     const Vector2 m = GetMousePosition();
     const int hot = !sn_ui_blocked(ui) && CheckCollisionPointRec(m, r);
 
+    if (hot || ui->active == id) sn_cursor(ui, MOUSE_CURSOR_RESIZE_EW);
     if (hot && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) ui->active = id;
 
     int changed = 0;
@@ -473,6 +548,7 @@ int sn_field(sn_ui *ui, int id, Rectangle r, std::string &text, const char *hint
 {
     const Vector2 m = GetMousePosition();
     const int hot = !sn_ui_blocked(ui) && CheckCollisionPointRec(m, r);
+    if (hot) sn_cursor(ui, MOUSE_CURSOR_IBEAM);
 
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !sn_ui_blocked(ui)) {
         if (hot) { ui->focus = id; ui->caret = (int)text.size(); }

@@ -262,6 +262,8 @@ void binPane(App &a, Rectangle r)
 
         /* --- what the mouse does here --- */
         if (hot) {
+            sn_cursor(&ui, b.missing ? MOUSE_CURSOR_NOT_ALLOWED
+                                     : MOUSE_CURSOR_POINTING_HAND);
             sn_tip(&ui, "%s - %s, %s. double-click to add it at the playhead, or drag it down",
                    b.info.name.c_str(), b.info.container.c_str(),
                    fmtSize(b.info.bytes).c_str());
