@@ -65,7 +65,16 @@ private:
      * megabyte per frame. */
     std::vector<uint8_t> m_canvas;
     std::vector<float> m_mix;
-    VideoFrame m_layer;
+
+    /* One scaled picture per track, kept between frames rather than one
+     * buffer used by each track in turn.
+     *
+     * It is what lets a source notice that the buffer it is being handed
+     * already holds the frame being asked for - see VideoFrame::stamp - which
+     * a single shared buffer would defeat, because every track would find the
+     * previous track's picture in it. The cost is a canvas-sized buffer per
+     * video track, which at a preview size is a few megabytes each. */
+    std::map<int, VideoFrame> m_layers;
 };
 
 /* The multiplier a clip's fades put on it at timeline time t: 1 in the middle,

@@ -6,6 +6,7 @@
 
 #include "sn_media.h"
 
+#include <atomic>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -392,6 +393,23 @@ bool Source::convert(void *avframe, VideoFrame *out, int outW, int outH)
     }
     if (outW <= 0 || outH <= 0) { outW = f->width; outH = f->height; }
 
+    /* Already done, into this very buffer. See m_frameNo in the header: the
+     * caller is asking for a picture it is still holding, which is what every
+     * second request looks like when the timeline runs faster than the
+     * footage. Nothing to scale, nothing to copy. */
+    if (out->stamp != 0 && out->stamp == m_conv && m_convFrame == m_frameNo &&
+        m_convW == outW && m_convH == outH && out->w == outW && out->h == outH &&
+        out->rgba.size() == (size_t)outW * outH * 4)
+        return true;
+
+    /* Whether what comes out of this can have anything see-through in it.
+     * yuv420p cannot; a GIF's pal8 and a PNG's rgba can. swscale fills the
+     * alpha channel with 255 either way, so this is the only thing that knows
+     * the difference. */
+    const AVPixFmtDescriptor *pfd = av_pix_fmt_desc_get((AVPixelFormat)f->format);
+    m_opaque = pfd && !(pfd->flags & AV_PIX_FMT_FLAG_ALPHA) &&
+               !(pfd->flags & AV_PIX_FMT_FLAG_PAL);
+
     const bool swap = (m_info.rotation == 90 || m_info.rotation == 270);
     const int sw = swap ? outH : outW;   /* what sws produces, pre-rotation */
     const int sh = swap ? outW : outH;
@@ -445,6 +463,16 @@ bool Source::convert(void *avframe, VideoFrame *out, int outW, int outH)
 
     out->w = outW;
     out->h = outH;
+
+    /* Sign it, so the next call can tell that this buffer still holds this
+     * frame. A counter shared by every source in the process: two of them
+     * filling the same buffer in turn must not look alike. */
+    static std::atomic<uint64_t> ink{1};
+    out->stamp = ink.fetch_add(1);
+    m_conv = out->stamp;
+    m_convFrame = m_frameNo;
+    m_convW = outW;
+    m_convH = outH;
     return true;
 }
 
@@ -452,6 +480,7 @@ bool Source::nextVideo(VideoFrame *out, int outW, int outH)
 {
     if (!hasVideo()) return false;
     if (!demux_next_frame(m_v)) return false;
+    m_frameNo++;
 
     double t = frame_time(m_v, FRM(m_v));
     if (t >= 0) m_vpos = t;
@@ -498,6 +527,7 @@ bool Source::frameAt(double t, VideoFrame *out, int outW, int outH)
     bool haveAny = false;
     for (;;) {
         if (!demux_next_frame(m_v)) break;
+        m_frameNo++;
 
         double ft = frame_time(m_v, FRM(m_v));
         if (ft >= 0) m_vpos = ft;

@@ -16,6 +16,7 @@
 #include "sn_render.h"
 #include "sn_timeline.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -326,6 +327,50 @@ static void test_render()
         CHECK(lit(480, 180), "the right half is drawn");
         CHECK(!lit(320, 10), "and the top of the canvas is still black");
         CHECK(!lit(320, 350), "as is the bottom");
+    }
+
+    /* A timeline running faster than its footage.
+     *
+     * Sixty frames asked for across one second of a thirty frame clip: each
+     * source frame is wanted twice, and the second time it is already sitting
+     * scaled in the buffer being handed over, so nothing is decoded or
+     * scaled. That shortcut is worth about half the work of playing a clip at
+     * double its own rate, and it has exactly one way to go wrong, which is
+     * to keep handing back a picture after the moment for it has passed.
+     *
+     * So this counts how many different pictures come out. Thirty is right.
+     * One means the preview has frozen; sixty means every frame was scaled
+     * twice and the shortcut is not working. */
+    {
+        sn::Project fast = sn::newProject();
+        std::string e3;
+        int id = sn::importFile(fast, V1, &e3);
+        sn::placeItem(fast, id, 0.0, 0, -2);
+        fast.width = 320;
+        fast.height = 180;
+
+        sn::Renderer r3(&fast);
+        sn::VideoFrame f3;
+
+        std::vector<uint64_t> seen;
+        for (int i = 0; i < 60; i++) {
+            if (!r3.videoAt(1.0 + i / 60.0, 320, 180, &f3)) continue;
+            /* Cheap and good enough to tell two frames of colour bars apart:
+             * every byte added up, which changes whenever anything moves. */
+            uint64_t sum = 0;
+            for (size_t k = 0; k < f3.rgba.size(); k += 4)
+                sum += f3.rgba[k] * 3u + f3.rgba[k + 1] * 5u + f3.rgba[k + 2] * 7u;
+            seen.push_back(sum);
+        }
+        CHECK(seen.size() == 60, "sixty frames came out, got %d", (int)seen.size());
+
+        std::vector<uint64_t> uniq = seen;
+        std::sort(uniq.begin(), uniq.end());
+        uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
+
+        CHECK(uniq.size() >= 25 && uniq.size() <= 35,
+              "a 30 fps clip at 60 fps gives about 30 different pictures, got %d",
+              (int)uniq.size());
     }
 
     /* Transparency. A GIF with an alpha channel laid over a video has to show

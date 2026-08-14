@@ -66,6 +66,13 @@ struct VideoFrame {
     double pts = -1.0;             /* seconds from the start of the file */
     std::vector<uint8_t> rgba;
 
+    /* Which conversion put these pixels here. Written only by Source, and
+     * only so that a Source asked to fill the same buffer with the same frame
+     * at the same size twice can see that it already has, and do nothing.
+     *
+     * Zero means nothing has filled it, which is what a fresh frame says. */
+    uint64_t stamp = 0;
+
     bool valid() const { return w > 0 && h > 0 && !rgba.empty(); }
 };
 
@@ -103,6 +110,16 @@ public:
     /* Where the decoder currently sits, in source seconds. -1 before the
      * first frame comes out. */
     double videoPos() const { return m_vpos; }
+
+    /* Whether the last converted frame can be trusted to be fully opaque -
+     * that is, whether the format it was decoded from carries an alpha
+     * channel at all. Most video does not, and a compositor that knows it is
+     * laying down a solid picture can copy rows instead of reading, testing
+     * and blending four channels a pixel at a time.
+     *
+     * False until something has been decoded, which is the careful answer:
+     * treating a transparent layer as opaque paints over what is behind it. */
+    bool videoOpaque() const { return m_opaque; }
 
     void seekVideo(double t);
 
@@ -162,6 +179,28 @@ private:
      * the next one - and a paused preview walks forward a frame every time an
      * edit asks it to redraw. */
     bool m_vhave = false;
+
+    /* How many frames this source has decoded, and what the last conversion
+     * produced. Together they answer "does the buffer I have been handed
+     * already hold this frame at this size?", and when it does the scale is
+     * skipped entirely.
+     *
+     * That is not a rare case. A 30 fps clip on a 60 fps timeline is two
+     * requests per frame, and at a 1600x900 preview a colour-convert and
+     * scale is around four milliseconds - so the half of them that ask for a
+     * picture already sitting in the buffer were most of what made a
+     * non-native frame rate stutter.
+     *
+     * The count is the identity rather than the timestamp because a frame
+     * without a usable pts leaves m_vpos where it was, and two different
+     * pictures answering to the same number is exactly the mistake that shows
+     * up as a preview that has stopped moving. */
+    bool m_opaque = false;
+
+    uint64_t m_frameNo = 0;
+    uint64_t m_conv = 0;          /* the stamp we wrote into that buffer  */
+    uint64_t m_convFrame = 0;     /* which decoded frame it holds         */
+    int m_convW = 0, m_convH = 0;
 
     /* Audio held back between audioAt calls: whatever the last decoded frame
      * had left over after the mixer took its block. Without it every call

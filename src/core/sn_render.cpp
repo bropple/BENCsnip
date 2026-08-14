@@ -40,6 +40,7 @@ void Renderer::reset()
     for (auto &kv : m_open) delete kv.second;
     m_open.clear();
     m_failed.clear();
+    m_layers.clear();
 }
 
 Source *Renderer::source(int itemId)
@@ -108,6 +109,12 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
     bool any = false;
     if (!m_p) { out->rgba = m_canvas; return false; }
 
+    /* A deleted track leaves its buffer behind - the project is handed over
+     * whole rather than as a list of changes, so there is nothing to tell us
+     * it went. Dropping the lot when there are more buffers than tracks costs
+     * one frame of scaling and bounds what the map can hold. */
+    if (m_layers.size() > m_p->tracks.size()) m_layers.clear();
+
     /* Front to back is bottom to top of the list: the top row is the back of
      * the picture, so it is drawn first and everything else lands on top of
      * it. That is the opposite of what most editors do and it is what this
@@ -165,11 +172,16 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
         const int fullW = std::max(1, (int)std::lround(fw / keepX));
         const int fullH = std::max(1, (int)std::lround(fh / keepY));
 
-        if (!s->frameAt(c->srcAt(t), &m_layer, fullW, fullH)) continue;
-        if (!m_layer.valid()) continue;
+        /* This track's own buffer, kept from frame to frame so the source
+         * can skip the scale when it is being asked for a picture that is
+         * already in there. */
+        VideoFrame &layer = m_layers[tr.id];
 
-        const int cx = (int)std::lround(tr.cropL * m_layer.w);
-        const int cy = (int)std::lround(tr.cropT * m_layer.h);
+        if (!s->frameAt(c->srcAt(t), &layer, fullW, fullH)) continue;
+        if (!layer.valid()) continue;
+
+        const int cx = (int)std::lround(tr.cropL * layer.w);
+        const int cy = (int)std::lround(tr.cropT * layer.h);
 
         const double g = fadeGain(*c, t);
         if (g <= 0.0) { any = true; continue; }
@@ -183,16 +195,33 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
 
         const int fade = (int)std::lround(std::min(1.0, g) * 255.0);
 
+        /* A solid picture at full level, with every pixel of the row coming
+         * from somewhere inside the source, is a copy - no alpha to read, no
+         * blend to compute, nothing to decide per pixel. That is what almost
+         * every frame of ordinary video is, and it is around three times
+         * quicker than the general path below. The moment a layer can be
+         * see-through, or is fading, or hangs off the side, it takes the
+         * general path instead. */
+        const int rsx0 = cx + (x0 - ox), rsx1 = cx + (x1 - ox);
+        const bool solid = fade >= 255 && s->videoOpaque() && rsx0 >= 0 &&
+                           rsx1 <= layer.w;
+        const size_t rowBytes = (size_t)(x1 - x0) * 4;
+
         for (int y = y0; y < y1; y++) {
             const int sy = cy + (y - oy);
-            if (sy < 0 || sy >= m_layer.h) continue;
+            if (sy < 0 || sy >= layer.h) continue;
 
             uint8_t *d = m_canvas.data() + ((size_t)y * w + x0) * 4;
-            const uint8_t *ss = m_layer.rgba.data() + (size_t)sy * m_layer.w * 4;
+            const uint8_t *ss = layer.rgba.data() + (size_t)sy * layer.w * 4;
+
+            if (solid) {
+                std::memcpy(d, ss + (size_t)rsx0 * 4, rowBytes);
+                continue;
+            }
 
             for (int x = x0; x < x1; x++, d += 4) {
                 const int sx = cx + (x - ox);
-                if (sx < 0 || sx >= m_layer.w) continue;
+                if (sx < 0 || sx >= layer.w) continue;
                 const uint8_t *p = ss + (size_t)sx * 4;
 
                 /* The source's own alpha, times the clip's fade.
