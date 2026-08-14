@@ -326,9 +326,21 @@ jobs:
           fi
           echo "self-contained"
 
-      # One executable and the paperwork, which is what tools/package.sh
-      # assembles for a release - used here too so a push and a tag cannot
-      # disagree about what goes in the box.
+      # How long it takes to come up, on the only Windows machine this project
+      # has. Startup is the one thing that cannot be measured from a Linux
+      # desktop, and "slow on Windows" is not something to guess at: this
+      # prints where the time goes, so the answer is a list of numbers.
+      #
+      # Not allowed to fail the build. A runner has no graphics driver worth
+      # the name and may not manage a GL context at all - and if it cannot,
+      # that is itself worth seeing in the log.
+      - name: How long it takes to start
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          ls -l bencsnip.exe
+          ./bencsnip.exe --timing --frames 2 --shot startup.png || true
+
       - name: Package
         run: tools/package.sh windows-x86_64 "$(git rev-parse --short HEAD)"
 

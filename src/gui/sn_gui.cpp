@@ -141,6 +141,22 @@ void sn_cursor_apply(sn_ui *ui)
      * knows, and on some platforms a visible flicker. */
     static int hidden = 0;
 
+    /* Nothing is claimed while the pointer is somewhere else.
+     *
+     * A cursor shape is set on the application, not on the rectangle it was
+     * asked for, and on macOS it stays set: leave the window over a track
+     * edge and the resize arrow follows you onto the desktop and stays there
+     * until the program quits. The same goes for the hidden cursor the loop
+     * glyph uses, which is worse - the pointer simply disappears.
+     *
+     * So the shape is handed back at the border. This is the only place that
+     * knows the pointer left, because the panes stop being asked at all. */
+    if (!IsCursorOnScreen() || !IsWindowFocused()) {
+        if (hidden) { ShowCursor(); hidden = 0; }
+        SetMouseCursor(MOUSE_CURSOR_DEFAULT);
+        return;
+    }
+
     if (ui->cursorGlyph >= 0) {
         if (!hidden) { HideCursor(); hidden = 1; }
         Vector2 m = GetMousePosition();

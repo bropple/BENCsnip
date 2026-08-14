@@ -160,6 +160,14 @@ struct App {
 void binPane(App &a, Rectangle r);
 void binShutdown(App &a);
 void timelinePane(App &a, Rectangle r);
+/* How long each part of starting up took, for the info window. Filled in by
+ * main as it goes; see the note beside the marks there. */
+int startupPhases();
+const char *startupPhaseName(int i);
+double startupPhaseMs(int i);
+double startupWindowMs();
+double startupReadyMs();
+
 void previewPane(App &a, Rectangle r);
 
 /* --- the mascot --- */

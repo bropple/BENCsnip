@@ -883,6 +883,23 @@ void infoWindow(App &a)
         row("h.264 encoder", haveEncoder("libx264") ? "libx264" : "not in this build");
         row("vp9 encoder", haveEncoder("libvpx-vp9") ? "libvpx-vp9" : "not in this build");
         row("aac encoder", haveEncoder("aac") ? "aac" : "not in this build");
+
+        /* How long this copy took to start.
+         *
+         * Two lines rather than the whole breakdown, which is what --timing
+         * prints; these are the two numbers that decide where to look. If the
+         * window took a moment and the rest was quick, the time went into the
+         * driver or the loader and none of it is this program's to give back.
+         * If they are far apart, it is ours.
+         *
+         * Shown here at all because the Windows build is linked for the
+         * windowing subsystem and has nowhere to print, and "it takes fifteen
+         * seconds to open" needs a number attached before anyone can act on
+         * it. */
+        snprintf(line, sizeof line, "%.0f ms to the window, %.0f ms to ready",
+                 startupWindowMs(), startupReadyMs());
+        row("startup", line);
+
         ly += 8;
         sn_text(&ui, SN_F_TINY, "S. Tarr is BENCO's audio/visual person. He is drawn,",
                 body.x + 10, ly, SN_EDGE);

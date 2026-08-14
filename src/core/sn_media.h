@@ -159,6 +159,12 @@ public:
         int eof = 0;
         double tbase = 0.0;       /* av_q2d(stream time_base)             */
         int64_t start = 0;        /* stream start_time, 0 if unset        */
+
+        /* Whether going back to the very beginning can be done by rewinding
+         * the byte stream instead of asking libav to seek. See demux_seek:
+         * true only for GIF, where it is both correct and the difference
+         * between a loop that plays and a loop that hitches. */
+        bool rewindable = false;
     };
 
 private:

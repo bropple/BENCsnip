@@ -34,6 +34,14 @@ shots/
 /*.png
 !docs/*.png
 
+# A clip dropped in the top of the tree to try something out. Footage is
+# somebody's own and is nearly always large; media/ is ignored for the same
+# reason, and this is the same mistake made one directory up.
+/*.gif
+/*.mp4
+/*.mov
+/*.webm
+
 # OS cruft
 .DS_Store
 ._*

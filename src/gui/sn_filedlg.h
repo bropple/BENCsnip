@@ -47,4 +47,12 @@ int sn_open_dialog(void *owner, const char *title, const char *startDir,
 int sn_save_dialog(void *owner, const char *title, const char *defaultName,
                    const char *filterDesc, const char *ext, char *out, size_t cap);
 
+/* Attach to the console of whatever started this program, if there is one, so
+ * that printing works. Windows only, and a no-op everywhere else.
+ *
+ * It lives in this file because this is the one that already includes
+ * windows.h - which cannot be included beside raylib.h, the two of them
+ * having a Rectangle, a CloseWindow and a ShowCursor each. */
+void sn_attach_console(void);
+
 #endif /* SN_FILEDLG_H */

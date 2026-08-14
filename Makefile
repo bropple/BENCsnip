@@ -337,6 +337,12 @@ testmedia:
 colorkey=black:0.01:0.0,format=rgba,split[a][b];\
 [a]palettegen=reserve_transparent=1:max_colors=32[p];\
 [b][p]paletteuse=alpha_threshold=128" media/overlay.gif
+	@# An animated GIF where every frame differs from the last, for the loop
+	@# tests. overlay.gif cannot do that job: it is one still square, so a
+	@# decoder that handed back the same picture forever would pass.
+	ffmpeg -y -v error -f lavfi -i "testsrc2=size=160x120:rate=10:duration=0.8" \
+	  -vf "format=rgb24,split[a][b];[a]palettegen=max_colors=64[p];[b][p]paletteuse" \
+	  media/test7.gif
 	@# A smooth gradient, which is the thing a GIF palette is judged on: bars
 	@# and flat colour survive any palette at all, and a sky does not.
 	ffmpeg -y -v error -f lavfi -i \

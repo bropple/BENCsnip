@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 static int failures = 0;
 static int checks = 0;
@@ -44,6 +45,7 @@ static const char *A1 = "media/test3.mp3";      /* 6 s, audio only       */
 static const char *G1 = "media/overlay.gif";   /* 0.8 s, transparent    */
 static const char *V5 = "media/test5.mp4";      /* 2 s, a gradient       */
 static const char *V6 = "media/test6.mp4";      /* 2 s, silent audio     */
+static const char *G2 = "media/test7.gif";      /* 0.8 s, 8 moving frames */
 
 static bool have(const char *p)
 {
@@ -228,6 +230,53 @@ static void test_media()
         for (const sn::Track &t : sp.tracks)
             if (t.kind == sn::TRACK_AUDIO) ac += (int)t.clips.size();
         CHECK(ac == 0, "and lays down no audio clip, got %d", ac);
+    }
+
+    /* Playing a GIF to the end and going back to the start - which is what a
+     * looped clip does at every wrap - has to give back the frames it gave
+     * the first time.
+     *
+     * Worth its own test because that rewind does not go through libav's
+     * seek. A GIF has no index, so the generic seek walks the file and costs
+     * more the bigger it is: sixteen milliseconds on a nine megabyte one,
+     * every pass, landing as a hitch exactly when the animation comes round.
+     * Rewinding the byte stream instead is free, and this is the check that
+     * it is also right - the same shortcut on an mp4 hands back a picture
+     * from the middle of the header. */
+    if (have(G2)) {
+        std::string ge;
+        std::vector<std::vector<uint8_t>> ref;
+
+        sn::Source *a = sn::Source::open(G2, &ge);
+        CHECK(a != nullptr, "open %s: %s", G2, ge.c_str());
+        if (a) {
+            sn::VideoFrame f;
+            for (int i = 0; i < 8; i++) {
+                if (!a->frameAt(i * 0.1, &f, 80, 60)) break;
+                ref.push_back(f.rgba);
+            }
+            delete a;
+        }
+        CHECK(ref.size() == 8, "eight frames on the first pass, got %d", (int)ref.size());
+
+        /* Not all the same picture, or everything below passes for free. */
+        int distinct = 0;
+        for (size_t i = 1; i < ref.size(); i++)
+            if (ref[i] != ref[i - 1]) distinct++;
+        CHECK(distinct >= 6, "and they are different pictures, got %d changes", distinct);
+
+        sn::Source *b = sn::Source::open(G2, &ge);
+        if (b && ref.size() == 8) {
+            sn::VideoFrame f;
+            for (int i = 0; i < 8; i++) b->frameAt(i * 0.1, &f, 80, 60);   /* to the end */
+
+            int wrong = 0;
+            for (int i = 0; i < 4; i++) {                                  /* and round */
+                if (!b->frameAt(i * 0.1, &f, 80, 60) || f.rgba != ref[i]) wrong++;
+            }
+            CHECK(wrong == 0, "the wrap gives back the first pass, %d frames differ", wrong);
+        }
+        delete b;
     }
 
     /* The other half of that: real sound is not thrown away by the check. */

@@ -27,6 +27,7 @@
 #include "sn_version.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -1047,7 +1048,79 @@ static int g_shotAfter = 60;
  * screen in any program has ever covered them.
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * How long each part of starting up took
+ *
+ * Kept because startup is the one thing that cannot be measured from here:
+ * it is different on every machine, and the interesting cases - a driver
+ * negotiating a pixel format, a sound stack enumerating devices, a virus
+ * scanner reading a 40 MB executable - are all somewhere this program cannot
+ * see. What it can do is write down when it reached each line, so the answer
+ * is a list of numbers rather than a guess.
+ *
+ * `--timing` prints it. The clock starts at the first instruction of main,
+ * so the first entry also says how much went on before any of this ran.
+ * ------------------------------------------------------------------ */
+
 namespace {
+
+using sn_clock = std::chrono::steady_clock;
+sn_clock::time_point g_t0;
+bool g_timing = false;
+
+struct Mark {
+    const char *what;
+    double at;                 /* ms since main started */
+};
+Mark g_marks[16];
+int g_nmarks = 0;
+
+void mark(const char *what)
+{
+    if (g_nmarks >= (int)(sizeof g_marks / sizeof g_marks[0])) return;
+    const double at =
+        std::chrono::duration<double, std::milli>(sn_clock::now() - g_t0).count();
+    g_marks[g_nmarks++] = Mark{what, at};
+}
+
+} /* namespace */
+
+/* For the info window, which is where these numbers can be read on a machine
+ * with no console to print to - which is every Windows machine, since the
+ * executable is linked for the windowing subsystem and its standard output
+ * goes nowhere. */
+int startupPhases() { return g_nmarks; }
+const char *startupPhaseName(int i) { return i >= 0 && i < g_nmarks ? g_marks[i].what : ""; }
+double startupPhaseMs(int i) { return i >= 0 && i < g_nmarks ? g_marks[i].at : 0.0; }
+
+/* When something was first on screen, and when the whole of startup was done.
+ * The gap between them is the part this program controls. */
+double startupWindowMs()
+{
+    for (int i = 0; i < g_nmarks; i++)
+        if (std::strcmp(g_marks[i].what, "first frame") == 0) return g_marks[i].at;
+    return 0.0;
+}
+
+double startupReadyMs() { return g_nmarks ? g_marks[g_nmarks - 1].at : 0.0; }
+
+namespace {
+
+void timing_report()
+{
+    if (!g_timing) return;
+    printf("\nstartup, milliseconds from the first line of main:\n");
+    double prev = 0;
+    for (int i = 0; i < g_nmarks; i++) {
+        printf("  %8.1f  %+7.1f  %s\n", g_marks[i].at, g_marks[i].at - prev,
+               g_marks[i].what);
+        prev = g_marks[i].at;
+    }
+    printf("\n  the first number is also how long the window took to appear.\n"
+           "  anything before that - the loader, a scanner reading the whole\n"
+           "  executable, a driver picking a pixel format - is not in this list\n"
+           "  and is not something the program can shorten from the inside.\n\n");
+}
 
 struct Splash {
     Texture2D mark = {};      /* the BENCO wordmark   */
@@ -1137,7 +1210,9 @@ static int run(int argc, char **argv)
 {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT | FLAG_MSAA_4X_HINT);
     SetTraceLogLevel(LOG_WARNING);
+    mark("before window");
     InitWindow(1280, 760, SN_NAME " " SN_VERSION);
+    mark("window + GL");
     SetWindowMinSize(900, 560);
     SetExitKey(KEY_NULL);            /* Escape clears the selection */
 
@@ -1146,10 +1221,13 @@ static int run(int argc, char **argv)
      * millisecond and a half. */
     App a;
     sn_ui_init(&a.ui);
+    mark("font");
     splashInit(a);
     splashDraw(a, "starting", 0.15f);
+    mark("first frame");
 
     InitAudioDevice();
+    mark("audio");
     splashDraw(a, "sound", 0.35f);
 
     {
@@ -1178,6 +1256,7 @@ static int run(int argc, char **argv)
         if (got) SetWindowIcons(icons, got);
         for (int i = 0; i < got; i++) UnloadImage(icons[i]);
     }
+    mark("icons");
 
     splashDraw(a, "decoders", 0.55f);
 
@@ -1214,8 +1293,11 @@ static int run(int argc, char **argv)
     a.hist.reset(a.proj);
     a.proj.dirty = false;
 
+    mark("files named");
+
     splashDraw(a, "ready", 1.0f);
     splashDone();
+    timing_report();
 
     int frames = 0;
 
@@ -1397,6 +1479,12 @@ static int run(int argc, char **argv)
     peaksShutdown();
     if (a.preview.id) UnloadTexture(a.preview);
     sn_ui_free(&a.ui);
+    /* Give the pointer back before the window goes. Quitting while the loop
+     * glyph has it hidden is the one way it can be left hidden for good,
+     * since after this there is nobody to put it back. */
+    ShowCursor();
+    SetMouseCursor(MOUSE_CURSOR_DEFAULT);
+
     CloseAudioDevice();
     CloseWindow();
     return 0;
@@ -1406,6 +1494,19 @@ static int run(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    sn::g_t0 = sn::sn_clock::now();
+
+    /* Windows links this for the windowing subsystem, so that a double-click
+     * does not open a console behind the window - and the cost is that printf
+     * goes nowhere, including for --version, --help and --timing, which exist
+     * to be read from a terminal. This borrows the console of whatever
+     * started us, and does nothing at all anywhere else. */
+    sn_attach_console();
+
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--timing")) sn::g_timing = true;
+    }
+
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--version") || !strcmp(argv[i], "-v")) {
             printf("%s %s\n", SN_NAME, SN_VERSION);
@@ -1426,6 +1527,7 @@ int main(int argc, char **argv)
             printf("A .bencsnip project file among them is opened instead.\n\n");
             printf("  --shot FILE.png    draw a few frames, write a screenshot, exit\n");
             printf("  --frames N         how many frames to draw first (default 60)\n");
+            printf("  --timing           print how long each part of starting up took\n");
             return 0;
         }
     }
