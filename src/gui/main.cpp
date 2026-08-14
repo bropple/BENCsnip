@@ -1068,6 +1068,11 @@ using sn_clock = std::chrono::steady_clock;
 sn_clock::time_point g_t0;
 bool g_timing = false;
 
+/* Set by --no-msaa. See where it is used: a switch for finding out whether
+ * the multisampling hint is what makes a window slow to appear, on the only
+ * machine that can answer it. */
+bool g_noMsaa = false;
+
 struct Mark {
     const char *what;
     double at;                 /* ms since main started */
@@ -1219,21 +1224,23 @@ void splashDone()
 
 static int run(int argc, char **argv)
 {
-    /* No multisampling hint.
+    /* Multisampling, unless --no-msaa says otherwise.
      *
-     * It was here for the one curved thing on screen - S. Tarr's star - and
-     * it cost the whole of startup on Windows. Asking for a 4x multisampled
-     * pixel format makes the driver search its formats for one, and on a
-     * machine whose driver has no such format that search is where the
-     * program sat: measured on a Windows runner, InitWindow never returned at
-     * all, and on a real machine it is the ten to fifteen seconds before the
-     * window appears.
+     * It is here for the one curved thing on screen - S. Tarr's star - and it
+     * is also the first suspect for a slow start on Windows: asking for a 4x
+     * multisampled pixel format makes the driver search its formats for one,
+     * and a driver without such a format can take its time saying so. That is
+     * a suspicion and not a finding. It was tested on a Windows runner, where
+     * InitWindow does not return either way - that machine has no OpenGL
+     * worth the name and fails for its own reasons - so the experiment proved
+     * nothing and the flag stays.
      *
-     * Everything else here is rectangles and text, which multisampling does
-     * nothing for. The star is drawn from triangles and is slightly harder at
-     * the points without it, which is a trade worth making several times
-     * over. */
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
+     * Which leaves the switch, because the machine that can answer this is
+     * the one with the problem on it. Run with --timing, then again with
+     * --timing --no-msaa, and the phase list says whether this was it. */
+    unsigned flags = FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT;
+    if (!g_noMsaa) flags |= FLAG_MSAA_4X_HINT;
+    SetConfigFlags(flags);
     SetTraceLogLevel(LOG_WARNING);
     mark("before window");
     if (g_timing) { printf("  ... asking for the window and a GL context\n"); fflush(stdout); }
@@ -1532,6 +1539,7 @@ int main(int argc, char **argv)
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--timing")) sn::g_timing = true;
+        if (!strcmp(argv[i], "--no-msaa")) sn::g_noMsaa = true;
     }
 
     for (int i = 1; i < argc; i++) {
@@ -1555,6 +1563,8 @@ int main(int argc, char **argv)
             printf("  --shot FILE.png    draw a few frames, write a screenshot, exit\n");
             printf("  --frames N         how many frames to draw first (default 60)\n");
             printf("  --timing           print how long each part of starting up took\n");
+            printf("  --no-msaa          ask for a plainer pixel format, which some\n");
+            printf("                     drivers are much quicker to hand over\n");
             return 0;
         }
     }

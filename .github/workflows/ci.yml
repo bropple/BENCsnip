@@ -326,20 +326,20 @@ jobs:
           fi
           echo "self-contained"
 
-      # How long it takes to come up, on the only Windows machine this project
-      # has. Startup is the one thing that cannot be measured from a Linux
-      # desktop, and "slow on Windows" is not something to guess at: this
-      # prints where the time goes, so the answer is a list of numbers.
+      # There is deliberately no "run the window and time it" step here, and
+      # it is worth writing down why so it is not added again.
       #
-      # Not allowed to fail the build. A runner has no graphics driver worth
-      # the name and may not manage a GL context at all - and if it cannot,
-      # that is itself worth seeing in the log.
-      - name: How long it takes to start
-        continue-on-error: true
-        timeout-minutes: 2
-        run: |
-          ls -l bencsnip.exe
-          ./bencsnip.exe --timing --frames 2 --shot startup.png || true
+      # It was tried, to chase a slow start on Windows, and it answered the
+      # question: with each phase printing as it is reached, the log stops
+      # after "asking for the window and a GL context" and InitWindow never
+      # returns. But it stops there whatever the program does - with the
+      # multisampling hint and without it - because this runner has a basic
+      # display adapter and no OpenGL 3.3 to give. So the step could tell us
+      # where the time goes and never whether a change had helped, while
+      # costing two minutes of timeout on every push.
+      #
+      # The machine that can answer it is the one with the problem on it:
+      # bencsnip --timing prints the same list there.
 
       - name: Package
         run: tools/package.sh windows-x86_64 "$(git rev-parse --short HEAD)"
