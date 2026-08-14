@@ -35,9 +35,19 @@ using std::strlen;
 
 void sn_attach_console(void)
 {
-    /* Only when there is one to attach to: started from a terminal, output
-     * goes there; double-clicked, this fails and printing stays a no-op,
-     * which is the whole reason the binary is linked this way. */
+    /* Only when standard output has nowhere to go.
+     *
+     * If it is already a pipe or a file - `bencsnip --timing > out.txt`, or
+     * anything that captured this program's output, which is what a CI runner
+     * does - then writing works and there is nothing to fix. Attaching a
+     * console and pointing stdout at it in that case does the opposite of the
+     * intent: it takes the output away from whoever asked for it and puts it
+     * on a screen nobody is reading. Which is exactly what the first version
+     * of this did, and why a CI run printed nothing at all.
+     */
+    const HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h && h != INVALID_HANDLE_VALUE && GetFileType(h) != FILE_TYPE_UNKNOWN) return;
+
     if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
 
     FILE *f = nullptr;
