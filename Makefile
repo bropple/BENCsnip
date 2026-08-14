@@ -50,7 +50,8 @@ GUI_SRC  := src/gui/main.cpp \
             src/gui/sn_player.cpp \
             src/gui/sn_tarr.cpp \
             src/gui/sn_filedlg.cpp \
-            src/gui/sn_dialog.cpp
+            src/gui/sn_dialog.cpp \
+            src/gui/sn_peaks.cpp
 GUI_OBJ  := $(GUI_SRC:.cpp=.o)
 GUI      := bencsnip$(EXE)
 
@@ -341,6 +342,12 @@ colorkey=black:0.01:0.0,format=rgba,split[a][b];\
 	ffmpeg -y -v error -f lavfi -i \
 	  "gradients=s=320x240:c0=0x102040:c1=0xe0a070:x0=0:y0=0:x1=320:y1=240:d=2:r=10" \
 	  -frames:v 20 -c:v libx264 -pix_fmt yuv420p -crf 12 media/test5.mp4
+	@# Video with an audio track that has nothing in it, which is what a phone
+	@# with the microphone off writes - and what used to arrive with a clip on
+	@# the timeline that does nothing.
+	ffmpeg -y -v error -f lavfi -i "testsrc2=size=320x240:rate=25:duration=2" \
+	  -f lavfi -i "anullsrc=r=48000:cl=stereo" -t 2 -shortest \
+	  -c:v libx264 -pix_fmt yuv420p -c:a aac media/test6.mp4
 
 # The icon set, from assets/icon/film_camera_star.svg. Needs librsvg and
 # ImageMagick, and nothing else does - which is why the output is committed.

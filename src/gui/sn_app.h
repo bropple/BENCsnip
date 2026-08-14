@@ -15,6 +15,7 @@
 
 #include "sn_export.h"
 #include "sn_gui.h"
+#include "sn_peaks.h"
 #include "sn_player.h"
 #include "sn_project.h"
 #include "sn_timeline.h"

@@ -52,6 +52,16 @@ struct MediaInfo {
     int rate = 0, chans = 0;
     std::string acodec;
 
+    /* The file had an audio stream and there was nothing in it.
+     *
+     * hasAudio is false in that case, because a track of digital silence is
+     * not audio and putting it on the timeline gives somebody a clip to
+     * wonder about, mute, and drag around for no reason. Phone video with the
+     * microphone off, screen recordings, and anything converted from a GIF
+     * all arrive this way. This flag is what lets the interface say which of
+     * the two kinds of "no audio" a file is. */
+    bool silentAudio = false;
+
     /* Display size: coded size with the pixel aspect and rotation applied.
      * This is the size a preview or an export should use. */
     int dispW() const;

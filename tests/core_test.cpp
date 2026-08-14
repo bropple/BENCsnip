@@ -43,6 +43,7 @@ static const char *V2 = "media/test2.webm";     /* 5 s, 640x480, 25 fps  */
 static const char *A1 = "media/test3.mp3";      /* 6 s, audio only       */
 static const char *G1 = "media/overlay.gif";   /* 0.8 s, transparent    */
 static const char *V5 = "media/test5.mp4";      /* 2 s, a gradient       */
+static const char *V6 = "media/test6.mp4";      /* 2 s, silent audio     */
 
 static bool have(const char *p)
 {
@@ -206,6 +207,35 @@ static void test_media()
     CHECK(NEAR(mi.duration, 8.0, 0.1), "8 s, got %f", mi.duration);
 
     CHECK(!sn::probe("tests/core_test.cpp", &mi, &err), "a .cpp is not media");
+
+    /* A video whose audio track is nothing but silence has no audio, and must
+     * not put a clip on the timeline for it. Whether the sound is real is not
+     * something the container says - the stream is there either way - so this
+     * is the one property here that costs a decode to answer. */
+    if (have(V6)) {
+        sn::MediaInfo si;
+        CHECK(sn::probe(V6, &si, &err), "probe %s: %s", V6, err.c_str());
+        CHECK(si.hasVideo, "the silent one still has its picture");
+        CHECK(!si.hasAudio, "and no audio, because there is none in it");
+        CHECK(si.silentAudio, "and it says that is why");
+
+        sn::Project sp = sn::newProject();
+        const int sid = sn::importFile(sp, V6, &err);
+        CHECK(sid != 0, "it still imports: %s", err.c_str());
+        sn::placeItem(sp, sid, 0.0);
+
+        int ac = 0;
+        for (const sn::Track &t : sp.tracks)
+            if (t.kind == sn::TRACK_AUDIO) ac += (int)t.clips.size();
+        CHECK(ac == 0, "and lays down no audio clip, got %d", ac);
+    }
+
+    /* The other half of that: real sound is not thrown away by the check. */
+    {
+        sn::MediaInfo li;
+        CHECK(sn::probe(V1, &li, &err) && li.hasAudio && !li.silentAudio,
+              "a file with sound in it keeps its audio");
+    }
 
     sn::Source *s = sn::Source::open(V1, &err);
     CHECK(s != nullptr, "open %s: %s", V1, err.c_str());
@@ -779,6 +809,18 @@ static void test_export()
             CHECK(sn::probe(s.path, &mi, &err), "the gif is readable: %s", err.c_str());
             CHECK(mi.width == W && mi.height == H, "at %dx%d, got %dx%d", W, H,
                   mi.width, mi.height);
+
+            /* The whole two seconds, to within half a frame.
+             *
+             * A GIF holds a delay per frame rather than a timestamp, so the
+             * last frame's length has to be written rather than worked out
+             * from the one after it. Nothing did, the muxer fell back to a
+             * single centisecond, and every GIF this program wrote ended a
+             * frame short - which on a loop is a blip on every pass. That
+             * shows up here as a file that measures 1.9 seconds. */
+            CHECK(NEAR(mi.duration, 2.0, 0.05),
+                  "and lasts the full 2.00 s, got %.3f - a short last frame "
+                  "blips on every loop", mi.duration);
 
             sn::Source *src = sn::Source::open(s.path, &err);
             CHECK(src != nullptr, "and decodes: %s", err.c_str());

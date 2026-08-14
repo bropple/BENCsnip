@@ -95,6 +95,19 @@ typedef struct sn_ui {
     int focus;
     int caret;
 
+    /* The other end of a selection. Equal to caret when nothing is selected,
+     * which is the state everything else tests for. */
+    int anchor;
+
+    /* Set while the pointer is sweeping out a selection, so the field keeps
+     * following the mouse until it is let go - including outside the box. */
+    int fieldDrag;
+
+    /* When the caret last did anything. It stops blinking for a moment
+     * afterwards: a caret that happens to be in its dark half while somebody
+     * is arrowing along a path is a caret they have to stop and wait for. */
+    double caretLive;
+
     /* Set by the caller around controls that must not take the mouse this
      * frame - anything under a modal, or everything at all while a clip is
      * being dragged across the timeline. */

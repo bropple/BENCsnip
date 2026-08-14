@@ -329,6 +329,18 @@ static bool write_packets(AVFormatContext *out, AVCodecContext *enc, AVStream *s
         if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) return true;
         if (rc < 0) { stt->say("encoder failed: " + averr2(rc)); return false; }
 
+        /* How long this picture is on screen. Most encoders leave it at zero
+         * and most containers do not care, because a player reads the time of
+         * the next frame instead - but the last frame has no next one, and a
+         * GIF stores a delay per frame rather than a timestamp.
+         *
+         * Left at zero the muxer falls back to a single centisecond, so every
+         * GIF written here ended with a frame that flashed past in ten
+         * milliseconds. On a loop that is a blip on every pass. One frame at
+         * the encoder's own rate is exactly one tick of its time base. */
+        if (pkt->duration == 0 && enc->codec_type == AVMEDIA_TYPE_VIDEO)
+            pkt->duration = 1;
+
         av_packet_rescale_ts(pkt, enc->time_base, st->time_base);
         pkt->stream_index = st->index;
         rc = av_interleaved_write_frame(out, pkt);

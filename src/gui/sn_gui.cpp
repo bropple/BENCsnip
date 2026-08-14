@@ -578,70 +578,317 @@ int sn_slider(sn_ui *ui, int id, Rectangle r, float *v)
  * Text field
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * Text fields
+ *
+ * A box you can type in is a control everybody has used ten thousand times
+ * before they get here, and the whole of its behaviour is muscle memory:
+ * click where you want the caret, drag over a word to select it, shift-arrow
+ * to extend, control-C, control-V, right-click for a menu. A field that
+ * accepts characters and nothing else is a field that will be fought with
+ * every time somebody has to correct the middle of a path.
+ * ------------------------------------------------------------------ */
+
+/* Menus opened by a field carry a tag of their own, well clear of the ones
+ * the panes use, so a field can answer its own menu without the window's
+ * dispatcher ever seeing it. */
+enum { SN_FIELD_MENU = 500000 };
+
+static int field_is_word(char c)
+{
+    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+           (c >= 'a' && c <= 'z') || c == '_';
+}
+
+/* Where the caret goes for a click at this x. Nearest gap between two
+ * characters rather than the one under the pointer, which is what makes
+ * clicking just past the end of a word land after it. */
+static int field_caret_at(sn_ui *ui, const std::string &text, float left, float x)
+{
+    int best = 0;
+    float bestD = 1e9f;
+    for (int i = 0; i <= (int)text.size(); i++) {
+        const float w = sn_measure(ui, SN_F_SMALL, text.substr(0, i).c_str(), 0.0f);
+        const float d = std::fabs(left + w - x);
+        if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+}
+
+static void field_clamp(sn_ui *ui, const std::string &text)
+{
+    const int n = (int)text.size();
+    if (ui->caret > n) ui->caret = n;
+    if (ui->caret < 0) ui->caret = 0;
+    if (ui->anchor > n) ui->anchor = n;
+    if (ui->anchor < 0) ui->anchor = 0;
+}
+
+/* The selected range, low end first. Empty when the two ends agree. */
+static void field_range(const sn_ui *ui, int *from, int *to)
+{
+    *from = ui->caret < ui->anchor ? ui->caret : ui->anchor;
+    *to   = ui->caret < ui->anchor ? ui->anchor : ui->caret;
+}
+
+static int field_erase_selection(sn_ui *ui, std::string &text)
+{
+    int a, b;
+    field_range(ui, &a, &b);
+    if (a == b) return 0;
+    text.erase(text.begin() + a, text.begin() + b);
+    ui->caret = ui->anchor = a;
+    return 1;
+}
+
+/* Insert, replacing whatever was selected. Control characters are dropped
+ * rather than pasted: a filename with a newline in it is a filename that
+ * fails to open somewhere far away from here. */
+static int field_insert(sn_ui *ui, std::string &text, const char *s)
+{
+    int changed = field_erase_selection(ui, text);
+    for (const char *p = s; p && *p; p++) {
+        if (*p < 32 || (unsigned char)*p >= 127) continue;
+        if (text.size() >= 512) break;
+        text.insert(text.begin() + ui->caret, *p);
+        ui->caret++;
+        changed = 1;
+    }
+    ui->anchor = ui->caret;
+    return changed;
+}
+
 int sn_field(sn_ui *ui, int id, Rectangle r, std::string &text, const char *hint)
 {
     const Vector2 m = GetMousePosition();
     const int hot = !sn_ui_blocked(ui) && CheckCollisionPointRec(m, r);
     if (hot) sn_cursor(ui, MOUSE_CURSOR_IBEAM);
 
+    int changed = 0;
+    const float pad = 6;
+    const float inner = r.width - pad * 2;
+
+    /* The horizontal scroll has to be known before the mouse can be turned
+     * into a caret position, and it depends on where the caret already is:
+     * a path longer than the box is the normal case here, not the exception. */
+    if (ui->focus == id) field_clamp(ui, text);
+    const float caretW =
+        sn_measure(ui, SN_F_SMALL, text.substr(0, ui->focus == id ? ui->caret : 0).c_str(),
+                   0.0f);
+    const float shift = (ui->focus == id && caretW > inner) ? caretW - inner : 0.0f;
+    const float left = r.x + pad - shift;
+
+    /* --- the mouse --- */
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !sn_ui_blocked(ui)) {
-        if (hot) { ui->focus = id; ui->caret = (int)text.size(); }
-        else if (ui->focus == id) ui->focus = 0;
+        if (hot) {
+            const int wasFocused = ui->focus == id;
+            ui->focus = id;
+            if (!wasFocused) { ui->caret = (int)text.size(); ui->anchor = ui->caret; }
+
+            const int at = field_caret_at(ui, text, left, m.x);
+
+            if (sn_double_click(ui, 400000 + id)) {
+                /* The word under the pointer, or everything if that is not a
+                 * word - which is what makes double-clicking a number or a
+                 * bare filename select the lot. */
+                int a = at, b = at;
+                while (a > 0 && field_is_word(text[a - 1])) a--;
+                while (b < (int)text.size() && field_is_word(text[b])) b++;
+                if (a == b) { a = 0; b = (int)text.size(); }
+                ui->anchor = a;
+                ui->caret = b;
+            } else {
+                ui->caret = ui->anchor = at;
+                ui->fieldDrag = 1;
+            }
+        } else if (ui->focus == id) {
+            ui->focus = 0;
+            ui->fieldDrag = 0;
+        }
     }
 
-    int changed = 0;
+    if (ui->fieldDrag && ui->focus == id) {
+        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) ui->caret = field_caret_at(ui, text, left, m.x);
+        else ui->fieldDrag = 0;
+    }
+
+    if (hot && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && !sn_ui_blocked(ui)) {
+        ui->focus = id;
+        field_clamp(ui, text);
+        static const char *items[] = {"cut", "copy", "paste", "-", "select all"};
+        sn_menu_open(ui, m, items, 5, SN_FIELD_MENU + id);
+    }
+
+    /* Its own menu, answered here rather than by the window: a generic widget
+     * has no way to reach into the application's dispatcher, and the
+     * application has no business knowing what a text field's menu says. */
+    if (ui->menuOpen && ui->menuTag == SN_FIELD_MENU + id) {
+        int tag = 0;
+        const int pick = sn_menu_take(ui, &tag);
+        if (pick >= 0) {
+            int a, b;
+            field_range(ui, &a, &b);
+            switch (pick) {
+            case 0:
+                if (a != b) {
+                    SetClipboardText(text.substr(a, b - a).c_str());
+                    changed |= field_erase_selection(ui, text);
+                }
+                break;
+            case 1:
+                if (a != b) SetClipboardText(text.substr(a, b - a).c_str());
+                break;
+            case 2: {
+                const char *clip = GetClipboardText();
+                if (clip && *clip) changed |= field_insert(ui, text, clip);
+                break;
+            }
+            case 4:
+                ui->anchor = 0;
+                ui->caret = (int)text.size();
+                break;
+            default: break;
+            }
+        }
+    }
+
     const int focused = ui->focus == id;
 
+    /* --- the keyboard --- */
+    const int caretWas = ui->caret;
+
     if (focused) {
-        int ch;
-        while ((ch = GetCharPressed()) != 0) {
-            if (ch >= 32 && ch < 127 && text.size() < 512) {
-                text.insert(text.begin() + ui->caret, (char)ch);
-                ui->caret++;
-                changed = 1;
+        const bool ctrl = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL) ||
+                          IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER);
+        const bool shift = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+
+        auto press = [](int k) { return IsKeyPressed(k) || IsKeyPressedRepeat(k); };
+
+        /* After any movement: shift keeps the anchor where it was and drags
+         * the selection with the caret, and no shift collapses it. */
+        auto moved = [&](bool sh) { if (!sh) ui->anchor = ui->caret; };
+
+        if (ctrl) {
+            int a, b;
+            field_range(ui, &a, &b);
+
+            if (IsKeyPressed(KEY_A)) { ui->anchor = 0; ui->caret = (int)text.size(); }
+            if (IsKeyPressed(KEY_C) && a != b) SetClipboardText(text.substr(a, b - a).c_str());
+            if (IsKeyPressed(KEY_X) && a != b) {
+                SetClipboardText(text.substr(a, b - a).c_str());
+                changed |= field_erase_selection(ui, text);
+            }
+            if (IsKeyPressed(KEY_V)) {
+                const char *clip = GetClipboardText();
+                if (clip && *clip) changed |= field_insert(ui, text, clip);
+            }
+
+            /* Word at a time. Over the run of separators first, then the run
+             * of word characters, which is where every other text box stops. */
+            if (press(KEY_LEFT)) {
+                while (ui->caret > 0 && !field_is_word(text[ui->caret - 1])) ui->caret--;
+                while (ui->caret > 0 && field_is_word(text[ui->caret - 1])) ui->caret--;
+                moved(shift);
+            }
+            if (press(KEY_RIGHT)) {
+                const int n = (int)text.size();
+                while (ui->caret < n && !field_is_word(text[ui->caret])) ui->caret++;
+                while (ui->caret < n && field_is_word(text[ui->caret])) ui->caret++;
+                moved(shift);
+            }
+        } else {
+            int ch;
+            while ((ch = GetCharPressed()) != 0) {
+                if (ch >= 32 && ch < 127) {
+                    const char s[2] = {(char)ch, 0};
+                    changed |= field_insert(ui, text, s);
+                }
+            }
+
+            if (press(KEY_LEFT)) {
+                int a, b;
+                field_range(ui, &a, &b);
+                /* A selection collapses to its near end rather than moving
+                 * the caret one further, which is what every other text box
+                 * does and what the hand expects. */
+                if (a != b && !shift) ui->caret = a;
+                else if (ui->caret > 0) ui->caret--;
+                moved(shift);
+            }
+            if (press(KEY_RIGHT)) {
+                int a, b;
+                field_range(ui, &a, &b);
+                if (a != b && !shift) ui->caret = b;
+                else if (ui->caret < (int)text.size()) ui->caret++;
+                moved(shift);
+            }
+            if (press(KEY_HOME)) { ui->caret = 0; moved(shift); }
+            if (press(KEY_END)) { ui->caret = (int)text.size(); moved(shift); }
+
+            if (press(KEY_BACKSPACE)) {
+                if (!field_erase_selection(ui, text)) {
+                    if (ui->caret > 0) {
+                        text.erase(text.begin() + (ui->caret - 1));
+                        ui->caret--;
+                        ui->anchor = ui->caret;
+                        changed = 1;
+                    }
+                } else {
+                    changed = 1;
+                }
+            }
+            if (press(KEY_DELETE)) {
+                if (!field_erase_selection(ui, text)) {
+                    if (ui->caret < (int)text.size()) {
+                        text.erase(text.begin() + ui->caret);
+                        changed = 1;
+                    }
+                } else {
+                    changed = 1;
+                }
             }
         }
-        if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) {
-            if (ui->caret > 0) {
-                text.erase(text.begin() + (ui->caret - 1));
-                ui->caret--;
-                changed = 1;
-            }
-        }
-        if (IsKeyPressed(KEY_DELETE) && ui->caret < (int)text.size()) {
-            text.erase(text.begin() + ui->caret);
-            changed = 1;
-        }
-        if (IsKeyPressed(KEY_LEFT) && ui->caret > 0) ui->caret--;
-        if (IsKeyPressed(KEY_RIGHT) && ui->caret < (int)text.size()) ui->caret++;
-        if (IsKeyPressed(KEY_HOME)) ui->caret = 0;
-        if (IsKeyPressed(KEY_END)) ui->caret = (int)text.size();
-        if (ui->caret > (int)text.size()) ui->caret = (int)text.size();
+
+        field_clamp(ui, text);
+        if (ui->caret != caretWas || changed) ui->caretLive = GetTime();
     }
 
+    /* --- drawing --- */
     sn_panel(r, SN_WELL, focused ? SN_ACCENT : SN_BORDER);
 
-    const float pad = 6;
     const float ty = r.y + (r.height - SN_F_SMALL) * 0.5f;
 
     if (text.empty() && hint && !focused) {
         sn_text(ui, SN_F_SMALL, hint, r.x + pad, ty, SN_EDGE);
-    } else {
-        /* Scroll so the caret stays visible: a path longer than the box is
-         * the normal case, not the exception. */
-        const std::string head = text.substr(0, ui->caret);
-        float caretX = sn_measure(ui, SN_F_SMALL, head.c_str(), 0.0f);
-        float shift = 0;
-        const float inner = r.width - pad * 2;
-        if (focused && caretX > inner) shift = caretX - inner;
-
-        BeginScissorMode((int)(r.x + 1), (int)r.y, (int)(r.width - 2), (int)r.height);
-        sn_text(ui, SN_F_SMALL, text.c_str(), r.x + pad - shift, ty, SN_TEXT);
-        if (focused && std::fmod(GetTime(), 1.0) < 0.5)
-            DrawRectangle((int)(r.x + pad + caretX - shift), (int)ty, 1, SN_F_SMALL, SN_TEXT);
-        EndScissorMode();
+        return changed;
     }
 
+    BeginScissorMode((int)(r.x + 1), (int)r.y, (int)(r.width - 2), (int)r.height);
+
+    if (focused) {
+        int a, b;
+        field_range(ui, &a, &b);
+        if (a != b) {
+            const float xa = left + sn_measure(ui, SN_F_SMALL, text.substr(0, a).c_str(), 0.0f);
+            const float xb = left + sn_measure(ui, SN_F_SMALL, text.substr(0, b).c_str(), 0.0f);
+            DrawRectangleRec(Rectangle{xa, ty - 2, xb - xa, (float)SN_F_SMALL + 4},
+                             Color{SN_ACCENT.r, SN_ACCENT.g, SN_ACCENT.b, 90});
+        }
+    }
+
+    sn_text(ui, SN_F_SMALL, text.c_str(), left, ty, SN_TEXT);
+
+    if (focused) {
+        const float cx = left + sn_measure(ui, SN_F_SMALL,
+                                           text.substr(0, ui->caret).c_str(), 0.0f);
+        /* Solid while anything is happening to it, blinking once it is left
+         * alone - see sn_ui::caretLive. */
+        const bool busy = ui->fieldDrag || GetTime() - ui->caretLive < 0.6;
+        if (busy || std::fmod(GetTime(), 1.0) < 0.5)
+            DrawRectangle((int)cx, (int)ty, 1, SN_F_SMALL, SN_TEXT);
+    }
+
+    EndScissorMode();
     return changed;
 }
 

@@ -155,6 +155,107 @@ static double stream_fps(AVStream *st)
  * probe
  * ------------------------------------------------------------------ */
 
+/* Is there anything at all in this frame?
+ *
+ * A threshold of one sixteen-bit step rather than exactly zero, because an
+ * encoder handed silence does not always give back zeroes. Deliberately not a
+ * noise gate: a quiet recording is audio and belongs on the timeline. This is
+ * only meant to catch the track that has nothing in it. */
+static bool frame_is_silent(const AVFrame *f)
+{
+    const double thresh = 1.0 / 32768.0;
+    const AVSampleFormat fmt = (AVSampleFormat)f->format;
+    const int planar = av_sample_fmt_is_planar(fmt);
+    const int chans = f->ch_layout.nb_channels;
+    const int planes = planar ? chans : 1;
+    const int per = planar ? f->nb_samples : f->nb_samples * chans;
+
+    for (int p = 0; p < planes; p++) {
+        const uint8_t *d = f->extended_data ? f->extended_data[p] : nullptr;
+        if (!d) continue;
+
+        for (int i = 0; i < per; i++) {
+            double v;
+            switch (fmt) {
+            case AV_SAMPLE_FMT_U8:  case AV_SAMPLE_FMT_U8P:
+                v = (d[i] - 128) / 128.0; break;
+            case AV_SAMPLE_FMT_S16: case AV_SAMPLE_FMT_S16P:
+                v = ((const int16_t *)d)[i] / 32768.0; break;
+            case AV_SAMPLE_FMT_S32: case AV_SAMPLE_FMT_S32P:
+                v = ((const int32_t *)d)[i] / 2147483648.0; break;
+            case AV_SAMPLE_FMT_FLT: case AV_SAMPLE_FMT_FLTP:
+                v = ((const float *)d)[i]; break;
+            case AV_SAMPLE_FMT_DBL: case AV_SAMPLE_FMT_DBLP:
+                v = ((const double *)d)[i]; break;
+            default:
+                return false;      /* a format not known here: assume sound */
+            }
+            if (v > thresh || v < -thresh) return false;
+        }
+    }
+    return true;
+}
+
+/* Whether a file's audio stream contains nothing but silence.
+ *
+ * Stops at the first sample that is not silent, so a file with sound in it
+ * costs one frame of decoding - which is the common case and has to be free.
+ * The expensive case is the file that really is silent all the way through,
+ * and that is the one worth paying for.
+ *
+ * A cap, because "all the way through" on a two hour recording is not
+ * something to do while somebody is dragging files in. Past it the answer is
+ * "it has audio", which is the answer that cannot lose anybody their sound. */
+static bool audio_is_silent(const std::string &path)
+{
+    const double CAP = 120.0;
+
+    AVFormatContext *fmt = nullptr;
+    if (avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) < 0) return false;
+    if (avformat_find_stream_info(fmt, nullptr) < 0) { avformat_close_input(&fmt); return false; }
+
+    const int ai = av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+    if (ai < 0) { avformat_close_input(&fmt); return false; }
+
+    AVStream *st = fmt->streams[ai];
+    const AVCodec *codec = avcodec_find_decoder(st->codecpar->codec_id);
+    if (!codec) { avformat_close_input(&fmt); return false; }
+
+    AVCodecContext *dec = avcodec_alloc_context3(codec);
+    if (!dec) { avformat_close_input(&fmt); return false; }
+    avcodec_parameters_to_context(dec, st->codecpar);
+    if (avcodec_open2(dec, codec, nullptr) < 0) {
+        avcodec_free_context(&dec);
+        avformat_close_input(&fmt);
+        return false;
+    }
+
+    AVPacket *pkt = av_packet_alloc();
+    AVFrame *frm = av_frame_alloc();
+    bool silent = true;
+    double scanned = 0.0;
+
+    while (silent && scanned < CAP && av_read_frame(fmt, pkt) >= 0) {
+        if (pkt->stream_index == ai && avcodec_send_packet(dec, pkt) >= 0) {
+            while (avcodec_receive_frame(dec, frm) >= 0) {
+                if (dec->sample_rate > 0)
+                    scanned += frm->nb_samples / (double)dec->sample_rate;
+                if (!frame_is_silent(frm)) { silent = false; break; }
+            }
+        }
+        av_packet_unref(pkt);
+    }
+
+    /* Ran out of patience rather than out of file: say it has audio. */
+    if (silent && scanned >= CAP) silent = false;
+
+    av_frame_free(&frm);
+    av_packet_free(&pkt);
+    avcodec_free_context(&dec);
+    avformat_close_input(&fmt);
+    return silent;
+}
+
 bool probe(const std::string &path, MediaInfo *out, std::string *err)
 {
     quiet_once();
@@ -217,6 +318,18 @@ bool probe(const std::string &path, MediaInfo *out, std::string *err)
     }
 
     avformat_close_input(&fmt);
+
+    /* A stream of silence is not audio. See MediaInfo::silentAudio: it is
+     * where video from a phone with the microphone off, most screen
+     * recordings, and everything converted out of a GIF end up, and each one
+     * of them was arriving with a clip on the timeline that does nothing.
+     *
+     * An audio-only file is left alone whatever is in it - somebody who
+     * imported a wav meant to. */
+    if (mi.hasAudio && mi.hasVideo && audio_is_silent(path)) {
+        mi.hasAudio = false;
+        mi.silentAudio = true;
+    }
 
     if (!mi.hasVideo && !mi.hasAudio) {
         if (err) *err = mi.name + ": no video or audio in it";

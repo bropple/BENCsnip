@@ -348,17 +348,23 @@ void previewPane(App &a, Rectangle r)
         };
 
         /* Front to back, so a click picks what a person can actually see:
-         * the list is stored back-first. */
+         * the list is stored back-first.
+         *
+         * A locked track is not here. The lock is what somebody sets once the
+         * background is where they want it and they are placing things on top
+         * of it, and a lock that holds on the timeline but not on the canvas
+         * is worse than none - it is a promise kept in one window and broken
+         * in the other. */
         int hit = -1;
         for (int i = (int)a.proj.tracks.size() - 1; i >= 0 && hit < 0; i--) {
             const Track &t = a.proj.tracks[i];
-            if (t.kind != TRACK_VIDEO || t.muted || !t.at(a.playhead)) continue;
+            if (t.kind != TRACK_VIDEO || t.muted || t.locked || !t.at(a.playhead)) continue;
             if (CheckCollisionPointRec(m, toScreen(layerRect(t)))) hit = i;
         }
 
         const bool overView = CheckCollisionPointRec(m, view) && !sn_ui_blocked(&a.ui);
         Track *sel = a.proj.track(a.layoutTrack);
-        if (sel && sel->kind != TRACK_VIDEO) sel = nullptr;
+        if (sel && (sel->kind != TRACK_VIDEO || sel->locked)) sel = nullptr;
 
         /* --- the handles of whatever is selected --- */
         Rectangle hs[8] = {};
@@ -391,20 +397,47 @@ void previewPane(App &a, Rectangle r)
                 a.layerHandle = grabbed;
                 a.layerGrab = layerRect(*sel);
                 a.layerFrom = m;
+                a.dragMoved = false;
             } else if (hit >= 0) {
                 a.layoutTrack = hit;
                 a.drag = DRAG_LAYER;
                 a.layerHandle = -1;
                 a.layerGrab = layerRect(a.proj.tracks[hit]);
                 a.layerFrom = m;
+
+                /* The selection just changed, and everything below works on
+                 * `sel` - which was resolved at the top of this block and is
+                 * still the layer that was selected a moment ago.
+                 *
+                 * Leaving it stale is what made picking up a second layer
+                 * throw the first one across the canvas: the drag would write
+                 * the newly grabbed rectangle into the old track, which reads
+                 * as one layer jumping to where the other one is. */
+                sel = &a.proj.tracks[hit];
+                a.dragMoved = false;
             } else {
                 a.layoutTrack = -1;
+                sel = nullptr;
             }
         }
 
         /* --- carrying it on --- */
         if ((a.drag == DRAG_LAYER || a.drag == DRAG_LAYER_SIZE) && sel) {
-            if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            /* Until the pointer has actually gone somewhere, this is a click
+             * that selected a layer rather than a drag that moved one.
+             * Writing the same numbers back would put a step on the undo
+             * stack for having looked at something. */
+            if (!a.dragMoved &&
+                std::fabs(m.x - a.layerFrom.x) + std::fabs(m.y - a.layerFrom.y) >= 2.0f)
+                a.dragMoved = true;
+
+            if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+                /* Let go. Only a drag that changed something is worth an undo
+                 * step; a click that merely picked a layer is not. */
+                if (a.dragMoved) a.changed();
+                a.drag = DRAG_NONE;
+                a.layerHandle = -1;
+            } else if (a.dragMoved) {
                 const float dx = (m.x - a.layerFrom.x) / sc;
                 const float dy = (m.y - a.layerFrom.y) / sc;
 
@@ -462,10 +495,6 @@ void previewPane(App &a, Rectangle r)
                 sel->y = std::max(-4.0, std::min(4.0, sel->y));
 
                 a.changed(true);
-            } else {
-                a.changed();
-                a.drag = DRAG_NONE;
-                a.layerHandle = -1;
             }
         }
 
@@ -1365,6 +1394,7 @@ static int run(int argc, char **argv)
 
     a.player.stop();
     binShutdown(a);
+    peaksShutdown();
     if (a.preview.id) UnloadTexture(a.preview);
     sn_ui_free(&a.ui);
     CloseAudioDevice();

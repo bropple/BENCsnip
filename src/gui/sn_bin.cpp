@@ -264,9 +264,16 @@ void binPane(App &a, Rectangle r)
         if (hot) {
             sn_cursor(&ui, b.missing ? MOUSE_CURSOR_NOT_ALLOWED
                                      : MOUSE_CURSOR_POINTING_HAND);
-            sn_tip(&ui, "%s - %s, %s. double-click to add it at the playhead, or drag it down",
+            /* Why a file with an audio track shows no A: it is a track of
+             * silence, and saying so here is the difference between a
+             * deliberate decision and a bug somebody has to go looking for. */
+            sn_tip(&ui, "%s - %s, %s.%s double-click to add it at the playhead, "
+                        "or drag it down",
                    b.info.name.c_str(), b.info.container.c_str(),
-                   fmtSize(b.info.bytes).c_str());
+                   fmtSize(b.info.bytes).c_str(),
+                   b.info.silentAudio ? " its audio track is silent, so it is"
+                                        " not brought in."
+                                      : "");
 
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                 a.selBin = b.id;

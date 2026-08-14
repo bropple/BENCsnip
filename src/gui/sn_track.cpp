@@ -141,16 +141,46 @@ static void draw_clip(App &a, int idx, const Clip &c, bool video, bool hot)
         }
     }
     if (!video && r.width > 12) {
-        /* A flat line with a bulge, not the real waveform: drawing that means
-         * decoding the whole file, and the clip's length and position are
-         * what the eye is actually using here. */
+        /* The real waveform, read off the file by the worker in sn_peaks.
+         *
+         * Every column asks what the source is playing at that moment, using
+         * the same srcAt the renderer uses - so a trim shows the part that
+         * was kept, and a looped clip repeats its shape at each wrap without
+         * any of that being worked out here. */
+        const BinItem *bi = a.proj.item(c.source);
+        if (bi && !bi->missing) peaksAsk(c.source, bi->info.path);
+        std::shared_ptr<const Peaks> pk = peaksGet(c.source);
+
         const float mid = r.y + r.height * 0.6f;
-        for (float x = r.x + 3; x < r.x + r.width - 3; x += 3) {
-            const float ph = std::sin((x - r.x) * 0.11f) * 0.5f + 0.5f;
-            const float h = (r.height * 0.28f) * (0.35f + 0.65f * ph);
-            DrawLineEx(Vector2{x, mid - h}, Vector2{x, mid + h}, 1.5f,
-                       Color{(unsigned char)(edge.r), (unsigned char)(edge.g),
-                             (unsigned char)(edge.b), 160});
+        const float x0 = std::max(r.x + 2, lane.x);
+        const float x1 = std::min(r.x + r.width - 2, lane.x + lane.width);
+        /* Dark on the clip rather than light. The clip is mid green and gets
+         * brighter when it is selected, so a pale waveform reads on one and
+         * washes out on the other - and the level line drawn over the top of
+         * this is already pale. Two pale things on top of each other is one
+         * thing nobody can read. */
+        const Color wave = {0x1c, 0x2e, 0x14, 210};
+
+        if (pk && pk->ready && !pk->hi.empty()) {
+            const float amp = r.height * 0.34f;
+            for (float x = x0; x < x1; x += 1.0f) {
+                const double t = a.timeAt(x);
+                if (t < c.pos || t >= c.end()) continue;
+
+                /* The square root is presentation, not data: sound spends
+                 * most of its time far below full scale, and a linear
+                 * waveform of ordinary speech is a flat line with the
+                 * occasional spike. */
+                const float v = std::sqrt(pk->at(c.srcAt(t)));
+                const float h = std::max(0.5f, amp * v);
+                DrawLineEx(Vector2{x, mid - h}, Vector2{x, mid + h}, 1.0f, wave);
+            }
+        } else {
+            /* Still reading it. A flat line rather than an invented shape:
+             * the wrong waveform is worse than none, because somebody will
+             * cut on it. */
+            DrawLineEx(Vector2{x0, mid}, Vector2{x1, mid}, 1.0f,
+                       Color{edge.r, edge.g, edge.b, 90});
         }
     }
 
