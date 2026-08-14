@@ -153,7 +153,13 @@ static void draw_clip(App &a, int idx, const Clip &c, bool video, bool hot)
             char db[24];
             const double d = c.gain > 0.0001 ? 20.0 * std::log10(c.gain) : -60.0;
             snprintf(db, sizeof db, "%+.1f dB", d);
-            sn_text(&ui, SN_F_TINY, db, r.x + r.width * 0.5f - 22, ly - 14, SN_TEXT);
+
+            /* On a dark patch of its own: the waveform is drawn underneath,
+             * and light text on it is a number you have to squint at. */
+            const float w = sn_measure(&ui, SN_F_TINY, db, 0.0f);
+            const float x = r.x + (r.width - w) * 0.5f;
+            DrawRectangleRec(Rectangle{x - 3, ly - 15, w + 6, 14}, Color{0, 0, 0, 150});
+            sn_text(&ui, SN_F_TINY, db, x, ly - 14, SN_TEXT);
         }
     }
 
