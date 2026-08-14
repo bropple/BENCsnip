@@ -39,7 +39,7 @@ command -v "$MAGICK" >/dev/null 2>&1 || {
 
 FONT=assets/fonts/TerminusTTF.ttf
 MARK=assets/brand/BENCO_Logo_Terminal.png    # white on transparent
-STAR=assets/icon/star-256.png
+ICON=assets/icon/icon-256.png
 OUT=assets/brand
 
 # src/gui/sn_gui.cpp. The disk image uses these too.
@@ -50,15 +50,15 @@ ACCENT='#78b946'
 
 # ---------------------------------------------------------------- welcome
 #
-# Reads top to bottom: who made it, what it is, a rule, S. Tarr, the licence.
-# The same order as the disk image window, turned on its side.
+# Reads top to bottom: who made it, what it is, a rule, the program's icon,
+# the licence. The same order as the disk image window, turned on its side.
 
 "$MAGICK" -size 164x314 "xc:$BG" \
     \( "$MARK" -trim +repage -resize 120x \) -gravity none -geometry +22+34 -composite \
     -font "$FONT" -pointsize 10 -fill "$DIM" \
     -annotate +36+80 'a video editor' \
     -fill "$BORDER" -draw 'rectangle 22,100 142,100' \
-    \( "$STAR" -resize 76x76 \) -geometry +44+140 -composite \
+    \( "$ICON" -resize 84x84 \) -geometry +40+136 -composite \
     -fill "$DIM" -pointsize 9 \
     -annotate +22+272 'BENCO Holdings' \
     -annotate +22+286 'MIT licensed' \

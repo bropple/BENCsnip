@@ -28,9 +28,24 @@ extern const unsigned int SN_FONT_TTF_LEN;
 extern const unsigned char SN_LOGO_PNG[];
 extern const unsigned int SN_LOGO_PNG_LEN;
 
-/* S. Tarr, for platforms where an executable has no icon resource. */
-extern const unsigned char SN_ICON_PNG[];
-extern const unsigned int SN_ICON_PNG_LEN;
+/* The program's icon - S. Tarr in front of a film camera - at the sizes a
+ * window manager asks for. Four of them rather than one scaled at startup:
+ * the 16 and 24 pixel versions have the film strip taken out of them, so they
+ * are not the big one made smaller and cannot be produced from it. See
+ * tools/make-icons.sh.
+ *
+ * On Windows the same artwork also arrives as a resource compiled into the
+ * executable, which is what the taskbar reads before the program has run a
+ * line of its own; these are what it uses afterwards, and on X11 they are the
+ * only copy there is. */
+extern const unsigned char SN_ICON_16[];
+extern const unsigned int SN_ICON_16_LEN;
+extern const unsigned char SN_ICON_32[];
+extern const unsigned int SN_ICON_32_LEN;
+extern const unsigned char SN_ICON_48[];
+extern const unsigned int SN_ICON_48_LEN;
+extern const unsigned char SN_ICON_64[];
+extern const unsigned int SN_ICON_64_LEN;
 
 /* Licence texts, NUL-terminated - the repository's own files, so what the
  * window shows and what the archive ships cannot drift apart. */

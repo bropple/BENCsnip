@@ -721,14 +721,30 @@ static int run(int argc, char **argv)
     InitAudioDevice();
 
     {
-        /* Several sizes rather than one: a window manager picks the nearest
-         * and scales it, and a 64-pixel star scaled to 16 is a smudge. */
-        static const int SIZES[] = {16, 24, 32, 48, 64, 128};
-        const int n = (int)(sizeof SIZES / sizeof SIZES[0]);
-        Image icons[6];
-        for (int i = 0; i < n; i++) icons[i] = sn_star_image(SIZES[i]);
-        SetWindowIcons(icons, n);
-        for (int i = 0; i < n; i++) UnloadImage(icons[i]);
+        /* Four sizes rather than one: a window manager picks the nearest and
+         * scales it, and the 16 pixel version is not the big one made smaller
+         * - it has the film strip taken out so the camera has room to read.
+         * Handing over only the 64 would throw that away. */
+        struct { const unsigned char *png; unsigned len; } src[] = {
+            {SN_ICON_16, SN_ICON_16_LEN}, {SN_ICON_32, SN_ICON_32_LEN},
+            {SN_ICON_48, SN_ICON_48_LEN}, {SN_ICON_64, SN_ICON_64_LEN},
+        };
+        const int n = (int)(sizeof src / sizeof src[0]);
+
+        Image icons[4];
+        int got = 0;
+        for (int i = 0; i < n; i++) {
+            icons[got] = LoadImageFromMemory(".png", src[i].png, (int)src[i].len);
+            if (icons[got].data == nullptr) continue;
+            /* SetWindowIcons wants RGBA and says nothing when given anything
+             * else; the loader gives that for these files, but a re-export
+             * that drops the alpha channel would otherwise show up as a
+             * missing icon rather than as a fixable mistake. */
+            ImageFormat(&icons[got], PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+            got++;
+        }
+        if (got) SetWindowIcons(icons, got);
+        for (int i = 0; i < got; i++) UnloadImage(icons[i]);
     }
 
     App a;
@@ -942,30 +958,9 @@ static int run(int argc, char **argv)
 
 } /* namespace sn */
 
-/* Writing the icon files needs no window and no GL context, so it happens
- * before either exists. tools/make-icons.sh calls this and then packs the
- * results into a .ico. */
-static int write_icons(const char *dir)
-{
-    static const int SIZES[] = {16, 24, 32, 48, 64, 128, 256, 512};
-    int failed = 0;
-    for (int i = 0; i < (int)(sizeof SIZES / sizeof SIZES[0]); i++) {
-        Image img = sn_star_image(SIZES[i]);
-        char path[512];
-        snprintf(path, sizeof path, "%s/star-%d.png", dir, SIZES[i]);
-        if (!ExportImage(img, path)) {
-            fprintf(stderr, "cannot write %s\n", path);
-            failed = 1;
-        }
-        UnloadImage(img);
-    }
-    return failed;
-}
-
 int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--icons") && i + 1 < argc) return write_icons(argv[++i]);
         if (!strcmp(argv[i], "--version") || !strcmp(argv[i], "-v")) {
             printf("%s %s\n", SN_NAME, SN_VERSION);
             return 0;
@@ -985,7 +980,6 @@ int main(int argc, char **argv)
             printf("A .bencsnip project file among them is opened instead.\n\n");
             printf("  --shot FILE.png    draw a few frames, write a screenshot, exit\n");
             printf("  --frames N         how many frames to draw first (default 60)\n");
-            printf("  --icons DIR        write the icon set from the drawn star\n");
             return 0;
         }
     }

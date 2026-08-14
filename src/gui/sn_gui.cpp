@@ -545,6 +545,7 @@ static const float STAR_INNER = 0.421f;
 static const float STAR_VIS_W = 1.158f, STAR_VIS_H = 0.358f, STAR_VIS_Y = -0.053f;
 static const float STAR_STR_W = 0.737f, STAR_STR_H = 0.168f, STAR_STR_Y = 0.042f;
 
+
 static void star_points(Vector2 *pts, Vector2 c, float r, float rot)
 {
     for (int i = 0; i < 10; i++) {
@@ -555,35 +556,7 @@ static void star_points(Vector2 *pts, Vector2 c, float r, float rot)
     }
 }
 
-static bool inside_poly(const Vector2 *p, int n, float x, float y)
-{
-    bool in = false;
-    for (int i = 0, j = n - 1; i < n; j = i++) {
-        if (((p[i].y > y) != (p[j].y > y)) &&
-            (x < (p[j].x - p[i].x) * (y - p[i].y) / (p[j].y - p[i].y) + p[i].x))
-            in = !in;
-    }
-    return in;
-}
 
-static float dist_to_poly(const Vector2 *p, int n, float x, float y)
-{
-    float best = 1e30f;
-    for (int i = 0, j = n - 1; i < n; j = i++) {
-        const float dx = p[j].x - p[i].x, dy = p[j].y - p[i].y;
-        const float len2 = dx * dx + dy * dy;
-        float t = 0.0f;
-        if (len2 > 1e-9f) {
-            t = ((x - p[i].x) * dx + (y - p[i].y) * dy) / len2;
-            if (t < 0.0f) t = 0.0f;
-            if (t > 1.0f) t = 1.0f;
-        }
-        const float qx = p[i].x + dx * t - x, qy = p[i].y + dy * t - y;
-        const float d = std::sqrt(qx * qx + qy * qy);
-        if (d < best) best = d;
-    }
-    return best;
-}
 
 void sn_star(Vector2 center, float radius, float rotation)
 {
@@ -607,74 +580,6 @@ void sn_star(Vector2 center, float radius, float rotation)
                        radius * STAR_STR_W, radius * STAR_STR_H};
     DrawRectangleRec(visor, SN_VISOR);
     DrawRectangleRec(strip, SN_ALERT);
-}
-
-Image sn_star_image(int size)
-{
-    if (size < 4) size = 4;
-
-    Color *px = (Color *)MemAlloc((unsigned)(size * size) * (unsigned)sizeof(Color));
-
-    const Vector2 c = {size * 0.5f, size * 0.5f};
-    /* Inset, so the points do not touch the edge of the tile: a taskbar draws
-     * icons hard against their neighbours and a mark that fills its square
-     * looks bigger than everything beside it. */
-    const float r = size * 0.46f;
-    const float stroke = r * 0.06f;
-    const bool detail = (size >= 28);
-
-    Vector2 pts[10];
-    star_points(pts, c, r, 0.0f);
-
-    const float visX0 = c.x - r * STAR_VIS_W * 0.5f, visX1 = c.x + r * STAR_VIS_W * 0.5f;
-    const float visY0 = c.y + r * STAR_VIS_Y, visY1 = visY0 + r * STAR_VIS_H;
-    const float strX0 = c.x - r * STAR_STR_W * 0.5f, strX1 = c.x + r * STAR_STR_W * 0.5f;
-    const float strY0 = c.y + r * STAR_STR_Y, strY1 = strY0 + r * STAR_STR_H;
-
-    enum { SS = 3 };
-
-    for (int y = 0; y < size; y++) {
-        for (int x = 0; x < size; x++) {
-            int hits = 0, rSum = 0, gSum = 0, bSum = 0;
-
-            for (int sy = 0; sy < SS; sy++) {
-                for (int sx = 0; sx < SS; sx++) {
-                    const float fx = (float)x + ((float)sx + 0.5f) / (float)SS;
-                    const float fy = (float)y + ((float)sy + 0.5f) / (float)SS;
-                    if (!inside_poly(pts, 10, fx, fy)) continue;
-
-                    Color k;
-                    if (fx >= strX0 && fx < strX1 && fy >= strY0 && fy < strY1) k = SN_ALERT;
-                    else if (detail && fx >= visX0 && fx < visX1 && fy >= visY0 && fy < visY1)
-                        k = SN_VISOR;
-                    else if (dist_to_poly(pts, 10, fx, fy) < stroke) k = SN_STAR_EDGE;
-                    else k = SN_STAR;
-
-                    hits++;
-                    rSum += k.r;
-                    gSum += k.g;
-                    bSum += k.b;
-                }
-            }
-
-            Color out = {0, 0, 0, 0};
-            if (hits) {
-                out.r = (unsigned char)(rSum / hits);
-                out.g = (unsigned char)(gSum / hits);
-                out.b = (unsigned char)(bSum / hits);
-                out.a = (unsigned char)((hits * 255) / (SS * SS));
-            }
-            px[y * size + x] = out;
-        }
-    }
-
-    Image img;
-    img.data = px;
-    img.width = size;
-    img.height = size;
-    img.mipmaps = 1;
-    img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
-    return img;
 }
 
 /* ------------------------------------------------------------------ *

@@ -199,7 +199,14 @@ The licences are in there because embedding the font without them would not be
 allowed: the OFL permits bundling provided every copy carries the notice in a
 form the user can easily view. The information window is that form.
 
-S. Tarr is drawn from the roster geometry, and `sn_star_image()` rasterises the
-same geometry for the window icon and for `make icons`. There is no icon
-artwork to keep in step, and no way for the icon in the taskbar to disagree
-with the one in the `.ico`.
+S. Tarr is drawn from the roster geometry wherever he appears *in* the
+interface - the empty preview, the export dialog, the about window - so he is
+never missing and never blurry.
+
+The program's icon is not him alone: it is `film_camera_star.svg`, S. Tarr in
+front of a film camera, and every size is generated from that one file by
+`make icons`. Four of them are compiled into the binary for the window and the
+taskbar; the same set becomes the `.ico` in the executable's resources and in
+the installer, and the `.icns` in the macOS bundle. Below 32 pixels the film
+strip is removed and the camera scaled up to fill the tile - simplifying
+rather than shrinking, which is what an icon set does at that size.

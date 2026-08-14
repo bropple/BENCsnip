@@ -68,7 +68,10 @@ EMBED    := src/gui/sn_embed.c
 EMBED_OBJ:= src/gui/sn_embed.o
 EMBED_IN := assets/fonts/TerminusTTF.ttf \
             assets/brand/BENCO_Logo_Terminal.png \
-            assets/icon/star-256.png \
+            assets/icon/icon-16.png \
+            assets/icon/icon-32.png \
+            assets/icon/icon-48.png \
+            assets/icon/icon-64.png \
             assets/fonts/OFL.txt \
             LICENSE \
             NOTICE
@@ -242,7 +245,10 @@ $(EMBED): mkembed$(EXE) $(EMBED_IN) Makefile
 	./mkembed$(EXE) $@ \
 	  SN_FONT_TTF     assets/fonts/TerminusTTF.ttf \
 	  SN_LOGO_PNG     assets/brand/BENCO_Logo_Terminal.png \
-	  SN_ICON_PNG     assets/icon/star-256.png \
+	  SN_ICON_16      assets/icon/icon-16.png \
+	  SN_ICON_32      assets/icon/icon-32.png \
+	  SN_ICON_48      assets/icon/icon-48.png \
+	  SN_ICON_64      assets/icon/icon-64.png \
 	  SN_LICENSE_OFL  assets/fonts/OFL.txt \
 	  SN_LICENSE_MIT  LICENSE \
 	  SN_NOTICE       NOTICE
@@ -320,7 +326,8 @@ testmedia:
 	ffmpeg -y -v error -f lavfi -i sine=frequency=330:duration=6 \
 	  -c:a libmp3lame media/test3.mp3
 
-# The icon set, from the star the program draws. See tools/make-icons.sh.
+# The icon set, from assets/icon/film_camera_star.svg. Needs librsvg and
+# ImageMagick, and nothing else does - which is why the output is committed.
 .PHONY: icons
-icons: $(GUI)
+icons:
 	tools/make-icons.sh

@@ -204,7 +204,7 @@ make test        the core tests: the timeline, the decoder, the mixer, both
 make testmedia   writes three small test files into media/ with ffmpeg
 make probe       a command-line media probe, for when it is unclear whether a
                  problem is the decoder or the interface
-make icons       regenerates assets/icon from the star the program draws
+make icons       regenerates assets/icon from film_camera_star.svg
 make clean
 ```
 
@@ -295,9 +295,18 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the rest.
 ## S. Tarr
 
 BENCO's audio/visual person, and the reason he turns up here rather than
-R. Triy. He is drawn from the roster geometry rather than loaded from a file,
-which is why he is never missing, is never blurry, and is the same shape in the
-window, in the taskbar and in the `.ico`.
+R. Triy. Inside the program he is drawn from the roster geometry rather than
+loaded from a file, which is why he is never missing and never blurry at any
+size the window happens to be.
+
+The program's *icon* is separate artwork — S. Tarr in front of an old film
+camera, `assets/icon/film_camera_star.svg` — because a five-pointed star on its
+own does not say video editor. Every size comes out of that one file
+(`make icons`): the window and taskbar icons compiled into the binary, the
+`.ico` in the Windows executable and its installer, and the `.icns` in the
+macOS bundle. Below 32 pixels the film strip is dropped and the camera scaled
+up to fill the tile, because at 16 pixels a strip is four grey smudges and the
+camera is the thing that has to read.
 
 ---
 

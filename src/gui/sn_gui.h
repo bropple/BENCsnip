@@ -182,10 +182,10 @@ int sn_menu_take(sn_ui *ui, int *tag);
  * the window happens to be.
  * ------------------------------------------------------------------ */
 
+/* Drawn, not loaded, and still drawn: this is S. Tarr the character, who
+ * appears in the empty preview, in the export dialog and in the about window.
+ * The program's *icon* is separate artwork - see tools/make-icons.sh - because
+ * a five-pointed star is not a video editor. */
 void sn_star(Vector2 center, float radius, float rotation);
-/* The same mark as a square RGBA image with a transparent background - the
- * window icon, generated from the geometry so the taskbar icon and the
- * on-screen one cannot drift apart. The caller owns it. */
-Image sn_star_image(int size);
 
 #endif /* SN_GUI_H */
