@@ -295,6 +295,13 @@ jobs:
   # ------------------------------------------------------------------
   publish:
     needs: [linux, macos, windows]
+    # Even if one target did not make it. Five targets across three runner
+    # pools means the release is hostage to the scarcest of them - macOS
+    # Intel queued for twenty minutes on the first run of this - and a
+    # release of four binaries today beats a release of five whenever the
+    # queue clears. What is missing is named in the log and can be attached
+    # later with `gh release upload`.
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -327,6 +334,19 @@ jobs:
         run: |
           mkdir -p dist
           find dl -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} dist/ \;
+
+          # Say plainly which targets are in this release and which are not,
+          # rather than leaving someone to notice the gap on the download
+          # page.
+          missing=
+          for want in linux-x86_64 linux-arm64 macos-arm64 macos-x86_64 windows-x86_64; do
+            ls dist/ | grep -q -- "$want" || missing="$missing $want"
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::this release is missing:$missing"
+          fi
+          [ -n "$(ls dist/ 2>/dev/null)" ] || { echo "nothing built at all"; exit 1; }
+
           cd dist
           sha256sum * > SHA256SUMS
           ls -l
