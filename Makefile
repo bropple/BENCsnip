@@ -19,6 +19,11 @@ CFLAGS   ?= -O2 -g
 CFLAGS   += -std=c99 -Wall -Wextra -MMD -MP
 CPPFLAGS += -Isrc/core
 
+# `all` is defined a long way down, and the first target in a makefile is what
+# a bare `make` builds. Saying so here means a rule can be added anywhere above
+# it without quietly becoming the default.
+.DEFAULT_GOAL := all
+
 UNAME_S := $(shell uname -s)
 
 # gcc appends .exe on Windows no matter what -o says. A target named without
@@ -126,10 +131,10 @@ FF_MODS := libavformat libavcodec libswscale libswresample libavutil
 VENDOR_FF := $(wildcard vendor/ffmpeg/lib/libavformat.a)
 
 ifneq ($(VENDOR_FF),)
-  FF_PC   := PKG_CONFIG_PATH=$(CURDIR)/vendor/ffmpeg/lib/pkgconfig pkg-config --static
+  FF_PC   := PKG_CONFIG_PATH="$(CURDIR)/vendor/ffmpeg/lib/pkgconfig" pkg-config --static
   FF_FROM := vendor/ffmpeg
 else ifdef FFMPEG
-  FF_PC   := PKG_CONFIG_PATH=$(FFMPEG)/lib/pkgconfig pkg-config --static
+  FF_PC   := PKG_CONFIG_PATH="$(FFMPEG)/lib/pkgconfig" pkg-config --static
   FF_FROM := FFMPEG=$(FFMPEG)
 else
   FF_PC   := pkg-config
@@ -140,6 +145,23 @@ FF_CFLAGS := $(shell $(FF_PC) --cflags $(FF_MODS) 2>/dev/null)
 FF_LIBS   := $(shell $(FF_PC) --libs $(FF_MODS) 2>/dev/null)
 
 CPPFLAGS += $(FF_CFLAGS)
+
+# Which ffmpeg the objects were compiled against, remembered between runs.
+#
+# Switching prefixes - a system ffmpeg one day, vendor/ffmpeg or FFMPEG= the
+# next - changes the headers without changing any source file, so make sees
+# nothing to do and relinks objects built against one libav against the shared
+# libraries of another. AVFrame is a different size between major versions, so
+# the result builds, runs, and crashes somewhere unrelated with a stack that
+# points at libavutil. This makes the objects depend on the answer.
+FF_STAMP := .ffmpeg-prefix
+
+.PHONY: FORCE
+FORCE:
+
+$(FF_STAMP): FORCE
+	@printf '%s\n' '$(FF_FROM) | $(FF_CFLAGS)' | cmp -s - $@ || \
+	  printf '%s\n' '$(FF_FROM) | $(FF_CFLAGS)' > $@
 
 # Windows: compile the icon in, link as a GUI subsystem binary so a
 # double-click does not open a console behind the window, and link the
@@ -169,6 +191,8 @@ core: $(CORE_LIB)
 # ------------------------------------------------------------------
 %.o: %.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(RL_CFLAGS) -c $< -o $@
+
+$(CORE_OBJ) $(GUI_OBJ) $(PROBE_OBJ) $(TEST_OBJ): $(FF_STAMP)
 
 $(CORE_OBJ): %.o: %.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
@@ -237,7 +261,7 @@ info:
 clean:
 	rm -f $(CORE_OBJ) $(GUI_OBJ) $(PROBE_OBJ) $(TEST_OBJ) $(GUI_RES) \
 	      $(CORE_LIB) $(GUI) $(PROBE) $(TEST) mkembed$(EXE) $(EMBED) \
-	      src/core/*.d src/gui/*.d tools/*.d tests/*.d
+	      src/core/*.d src/gui/*.d tools/*.d tests/*.d $(FF_STAMP)
 
 -include $(CORE_SRC:.cpp=.d) $(GUI_SRC:.cpp=.d) $(PROBE_SRC:.cpp=.d) \
          $(TEST_SRC:.cpp=.d) src/gui/sn_embed.d

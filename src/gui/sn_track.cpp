@@ -142,6 +142,21 @@ static void draw_clip(App &a, int idx, const Clip &c, bool video, bool hot)
         }
     }
 
+    /* The level line: where the clip's gain sits between silence and +6 dB,
+     * dragged with the mouse. Audio only - a video clip has no level, and a
+     * line across it would be a control that does nothing. */
+    if (!video && r.width > 20) {
+        const float ly = r.y + r.height * (1.0f - (float)(c.gain * 0.5)) ;
+        DrawLineEx(Vector2{r.x + 1, ly}, Vector2{r.x + r.width - 1, ly}, 1.5f,
+                   Color{0xcd, 0xea, 0xb0, (unsigned char)(isSel || hot ? 220 : 120)});
+        if ((isSel || hot) && r.width > 70 && std::fabs(c.gain - 1.0) > 0.001) {
+            char db[24];
+            const double d = c.gain > 0.0001 ? 20.0 * std::log10(c.gain) : -60.0;
+            snprintf(db, sizeof db, "%+.1f dB", d);
+            sn_text(&ui, SN_F_TINY, db, r.x + r.width * 0.5f - 22, ly - 14, SN_TEXT);
+        }
+    }
+
     /* Fades, drawn as the ramp they are. */
     if (c.fadeIn > 0) {
         const float w = (float)(c.fadeIn * a.zoom);
@@ -388,6 +403,9 @@ void timelinePane(App &a, Rectangle r)
                      std::fabs(m.x - (cr.x + cr.width - (float)(c.fadeOut * a.zoom))) <
                          FADE_GRAB)
                 overWhat = DRAG_FADE_OUT;
+            else if (t.kind == TRACK_AUDIO &&
+                     std::fabs(m.y - (cr.y + cr.height * (1.0f - (float)(c.gain * 0.5)))) < 5)
+                overWhat = DRAG_GAIN;
             else overWhat = DRAG_CLIP;
             break;
         }
@@ -415,11 +433,9 @@ void timelinePane(App &a, Rectangle r)
             a.select(overClip, IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT));
             a.drag = overWhat;
             a.dragClip = overClip;
-            a.dragTrack = overClip.track;
             a.dragFrom = m;
             a.dragMoved = false;
             a.dragGrab = a.timeAt(m.x) - (c ? c->pos : 0);
-            a.dragStart = c ? c->pos : 0;
         } else if (overTrack >= 0) {
             a.clearSel();
             /* Clicking empty timeline moves the playhead there, which is
@@ -464,6 +480,19 @@ void timelinePane(App &a, Rectangle r)
             if (!a.dragMoved) break;
             double t = snap_time(a, a.timeAt(m.x), &a.dragClip);
             trimClip(a.proj, a.dragClip, a.drag == DRAG_TRIM_IN, t);
+            a.changed(true);
+            break;
+        }
+        case DRAG_GAIN: {
+            Clip *c = a.proj.clip(a.dragClip);
+            if (!c) break;
+            Rectangle cr = clip_rect(a, a.dragClip.track, *c);
+            double g = (1.0 - (m.y - cr.y) / (double)cr.height) * 2.0;
+            /* Snapping to unity, because "back to where it was" is the
+             * adjustment people make most often and a mouse cannot land on
+             * 1.000 by hand. */
+            if (std::fabs(g - 1.0) < 0.04) g = 1.0;
+            c->gain = std::max(0.0, std::min(2.0, g));
             a.changed(true);
             break;
         }
@@ -552,6 +581,7 @@ void timelinePane(App &a, Rectangle r)
                                : overWhat == DRAG_TRIM_OUT ? "drag to trim the end"
                                : overWhat == DRAG_FADE_IN  ? "drag the fade in"
                                : overWhat == DRAG_FADE_OUT ? "drag the fade out"
+                               : overWhat == DRAG_GAIN     ? "drag the level up or down"
                                                            : "drag to move it";
             sn_tip(&ui, "%s  %s of %s  -  %s", b->info.name.c_str(),
                    fmtTime(c->dur()).c_str(), fmtTime(b->info.duration).c_str(), verb);

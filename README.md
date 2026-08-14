@@ -104,9 +104,11 @@ exactly what the preview showed you, because both go through the same code.
 | **F12** | write a screenshot beside the program |
 
 The mouse: click a clip to select it, drag the middle to move it, drag either
-edge to trim it, drag the small square in a top corner to make a fade. The
-ruler scrubs. The wheel scrolls; Ctrl or Shift with it zooms; the middle
-button pans. Right-click a clip for the rest.
+edge to trim it, drag the small square in a top corner to make a fade, and
+drag the line across an audio clip to change its level — it snaps back to 0 dB
+on the way past. The ruler scrubs. The wheel scrolls; Ctrl or Shift with it
+zooms; the middle button pans. Right-click a clip for the rest. Delete with
+nothing selected closes the gap the playhead is sitting in.
 
 ---
 
@@ -156,15 +158,32 @@ person has never heard of.
 ### A self-contained binary
 
 By default the ffmpeg libraries are linked as shared objects, which is the
-right choice for a package: the user owns those libraries and can replace them,
-which is also what the LGPL asks for. For a binary you hand to someone
-directly, build a static ffmpeg prefix into `vendor/ffmpeg` (`include/`,
-`lib/*.a` and `lib/pkgconfig/`) and `make` picks it up instead — see NOTICE for
-what shipping that obliges you to do.
+right choice for a distribution package: the user owns those libraries and can
+replace them, which is also what the LGPL asks for. For a binary you hand to
+someone directly:
 
 ```
-make info      # what the build decided about raylib and ffmpeg, and from where
+tools/build-ffmpeg.sh          # ten to thirty minutes, into vendor/ffmpeg
+make clean && make
+make info                      # what the build decided, and from where
 ```
+
+`make` prefers `vendor/ffmpeg` over the system libraries when it is there, and
+`FFMPEG=/some/prefix` points it anywhere else. What comes out needs nothing but
+OpenGL, X11 and libc:
+
+```
+$ ldd bencsnip | wc -l
+14                             # and not one of them is libav
+```
+
+The script defaults to a GPL build with libx264, because H.264 is the format
+that plays everywhere; `--lgpl` skips it and the export falls back. Read the
+comment at the top of the script and NOTICE before you distribute either.
+
+Neither ffmpeg nor x264 can be built under a path containing a space — the
+script says so and tells you what to do instead, rather than installing half
+of itself into the first word of your home directory.
 
 ### Other targets
 

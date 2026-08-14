@@ -70,15 +70,6 @@ bool exportTimeline(const Project &p, const ExportSettings &s, ExportStatus *st)
  * so rather than silently doing the slow thing. */
 bool canStreamCopy(const Project &p, const ExportSettings &s, std::string *why);
 
-/* Encoders this build of ffmpeg actually has, best first, for the format
- * chooser. Returns names usable as ExportSettings::vcodec. */
-std::vector<std::string> videoEncoders();
-std::vector<std::string> audioEncoders();
-
-/* The container libav would infer from a filename, e.g. "mp4", or "" if it
- * cannot tell. */
-std::string containerFor(const std::string &path);
-
 } /* namespace sn */
 
 #endif /* SN_EXPORT_H */

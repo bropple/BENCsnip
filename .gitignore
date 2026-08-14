@@ -10,6 +10,7 @@ mkembed
 src/gui/sn_embed.c
 *.exe
 *.res.o
+.ffmpeg-prefix
 
 # Third-party libraries built or copied in locally. raylib and ffmpeg are
 # build dependencies, not part of this project's source - see the Makefile for

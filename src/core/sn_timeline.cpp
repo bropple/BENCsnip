@@ -302,34 +302,42 @@ double moveClip(Project &p, ClipRef &r, int newTrack, double newPos)
     const double delta = newPos - c->pos;
     const int dtrack = newTrack - r.track;
 
-    /* Linked clips move together, and either all of them move or none do. */
-    std::vector<ClipRef> group = linked(p, r);
-    std::vector<Clip> taken;
-    for (const ClipRef &g : group) {
+    /* Linked clips move together, and either all of them move or none do.
+     * Each lifted clip is kept beside the reference it came from rather than
+     * in a parallel vector: one clip that could not be found would otherwise
+     * shift every later index by one and move the wrong clips. */
+    struct Lifted {
+        ClipRef from;
+        Clip clip;
+    };
+    std::vector<Lifted> lifted;
+
+    for (const ClipRef &g : linked(p, r)) {
         Track *t = p.track(g.track);
         if (!t) continue;
         for (size_t i = 0; i < t->clips.size(); i++)
             if (t->clips[i].id == g.clip) {
-                Clip x = t->clips[i];
+                lifted.push_back(Lifted{g, t->clips[i]});
                 t->clips.erase(t->clips.begin() + i);
-                taken.push_back(x);
                 break;
             }
     }
 
     /* Place them back at the new position, each on the corresponding track. */
     ClipRef moved = r;
-    for (size_t i = 0; i < group.size(); i++) {
-        int tt = group[i].track + (group[i].track == r.track ? dtrack : 0);
+    for (Lifted &l : lifted) {
+        int tt = l.from.track + (l.from.track == r.track ? dtrack : 0);
         Track *t = p.track(tt);
-        if (!t || t->kind != p.tracks[group[i].track].kind) { tt = group[i].track; t = p.track(tt); }
+        if (!t || t->kind != p.tracks[l.from.track].kind) {
+            tt = l.from.track;
+            t = p.track(tt);
+        }
         if (!t) continue;
 
-        Clip x = taken[i];
-        x.pos += delta;
-        if (x.pos < 0) x.pos = 0;
-        Clip *placed = addClip(p, tt, x);
-        if (group[i] == r && placed) moved = ClipRef{tt, placed->id};
+        l.clip.pos += delta;
+        if (l.clip.pos < 0) l.clip.pos = 0;
+        Clip *placed = addClip(p, tt, l.clip);
+        if (l.from == r && placed) moved = ClipRef{tt, placed->id};
     }
 
     r = moved;
@@ -468,7 +476,7 @@ int closeGap(Project &p, double t, int trackIdx)
     }
 
     if (!any || gapEnd <= gapStart + EPS) return 0;
-    ripple(p, gapEnd, -(gapEnd - gapStart), trackIdx >= 0 ? -1 : -1);
+    ripple(p, gapEnd, -(gapEnd - gapStart));
     return 1;
 }
 

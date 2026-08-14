@@ -53,9 +53,6 @@ public:
      * mixer entirely on a video-only timeline. */
     bool hasAudioAt(double t, double dur) const;
 
-    /* Errors that happened while opening files, for the status line. */
-    const std::string &lastError() const { return m_err; }
-
 private:
     Source *source(int itemId);
 

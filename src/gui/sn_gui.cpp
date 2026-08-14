@@ -79,7 +79,6 @@ void sn_ui_free(sn_ui *ui)
 void sn_ui_frame(sn_ui *ui)
 {
     ui->tip[0] = 0;
-    ui->hot = 0;
     ui->suppress = 0;
     /* A drag ends when the button comes up, wherever the pointer is. Leaving
      * `active` set past the release is how a control ends up following the

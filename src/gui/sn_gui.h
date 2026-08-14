@@ -72,8 +72,6 @@ typedef struct sn_ui {
     float grabX, grabY;   /* pointer where the drag started */
     float grabV;          /* the control's value then       */
 
-    int hot;              /* what the pointer is over, for the status line */
-
     /* Double-click detection. */
     int lastId;
     double lastClick;

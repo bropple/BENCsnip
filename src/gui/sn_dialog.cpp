@@ -172,7 +172,9 @@ int fileDialog(App &a, Rectangle unused, const char *title, bool save, std::stri
             if (!isDir) g_br.name = n;
             if (sn_double_click(&ui, 8200 + i)) {
                 if (isDir) {
-                    g_br.dir += (g_br.dir.back() == '/' ? "" : "/") + n;
+                    if (g_br.dir.empty()) g_br.dir = "/";
+                    if (g_br.dir.back() != '/') g_br.dir += "/";
+                    g_br.dir += n;
                     browser_load();
                 } else {
                     *out = g_br.dir + "/" + n;
@@ -220,20 +222,42 @@ namespace {
 struct Preset {
     const char *label;
     const char *ext;
-    const char *vcodec;
-    const char *acodec;
+    /* Encoders in order of preference, ending in a null. Which of them a
+     * build of ffmpeg actually has is not knowable at compile time: a
+     * distribution package has libx264, an LGPL-only static build does not,
+     * and the difference should be a slightly different file rather than a
+     * dialog that fails after the user has chosen a filename. An empty first
+     * entry means the preset has no stream of that kind at all. */
+    const char *video[4];
+    const char *audio[4];
 };
 
 /* What someone actually exports. H.264 in mp4 first because it plays
  * everywhere, and that is the only property most exports need. */
 const Preset PRESETS[] = {
-    {"MP4", "mp4", "libx264", "aac"},
-    {"WEBM", "webm", "libvpx-vp9", "libopus"},
-    {"MKV", "mkv", "libx264", "aac"},
-    {"MP3", "mp3", "", "libmp3lame"},
-    {"WAV", "wav", "", "pcm_s16le"},
+    {"MP4", "mp4", {"libx264", "libopenh264", "mpeg4", nullptr}, {"aac", nullptr}},
+    {"WEBM", "webm", {"libvpx-vp9", "libvpx", nullptr}, {"libopus", "libvorbis", nullptr}},
+    {"MKV", "mkv", {"libx264", "libopenh264", "ffv1", nullptr}, {"aac", "flac", nullptr}},
+    {"MP3", "mp3", {nullptr}, {"libmp3lame", nullptr}},
+    {"WAV", "wav", {nullptr}, {"pcm_s16le", nullptr}},
 };
 const int NPRESET = (int)(sizeof PRESETS / sizeof PRESETS[0]);
+
+/* The first of a list this build has, or "" for none. */
+const char *pick(const char *const *names)
+{
+    for (int i = 0; names[i]; i++)
+        if (haveEncoder(names[i])) return names[i];
+    return "";
+}
+
+/* A preset is usable when everything it needs is present: an audio-only
+ * format with no encoder for it is a button that can only disappoint. */
+bool usable(const Preset &p)
+{
+    if (p.video[0] && !*pick(p.video)) return false;
+    return *pick(p.audio) != 0;
+}
 
 int g_preset = 0;
 int g_res = 0;         /* 0 source, 1 1080p, 2 720p, 3 480p */
@@ -318,6 +342,12 @@ void exportDialog(App &a)
     y += 14;
     for (int i = 0; i < NPRESET; i++) {
         Rectangle b = {r.x + 16 + i * 76.0f, y, 70, 24};
+        if (!usable(PRESETS[i])) {
+            sn_panel(b, SN_PANEL, SN_PANEL_HI);
+            sn_text_center(&ui, SN_F_SMALL, PRESETS[i].label, b.x + b.width * 0.5f,
+                           b.y + 4, SN_EDGE);
+            continue;
+        }
         if (sn_toggle(&ui, 8600 + i, b, PRESETS[i].label, g_preset == i)) {
             g_preset = i;
             g_path = swap_ext(g_path, PRESETS[i].ext);
@@ -342,7 +372,7 @@ void exportDialog(App &a)
     y += 34;
 
     /* Size. */
-    const bool videoOut = PRESETS[g_preset].vcodec[0] != 0;
+    const bool videoOut = PRESETS[g_preset].video[0] != nullptr;
     if (videoOut) {
         label(a, "SIZE", r.x + 16, y);
         y += 14;
@@ -372,8 +402,8 @@ void exportDialog(App &a)
 
     /* --- what it is going to do --- */
     a.ex.path = g_path;
-    a.ex.vcodec = PRESETS[g_preset].vcodec;
-    a.ex.acodec = PRESETS[g_preset].acodec;
+    a.ex.vcodec = PRESETS[g_preset].video[0] ? pick(PRESETS[g_preset].video) : "";
+    a.ex.acodec = pick(PRESETS[g_preset].audio);
     a.ex.fps = a.proj.fps;
     a.ex.crf = videoOut ? (int)std::lround(34 - g_quality * 20) : 20;
     a.ex.from = 0;
@@ -428,6 +458,11 @@ void exportDialog(App &a)
  * sensible without overwriting what the user typed last time. */
 void exportDialogPrepare(App &a)
 {
+    /* Land on something this build can actually write. */
+    if (!usable(PRESETS[g_preset]))
+        for (int i = 0; i < NPRESET; i++)
+            if (usable(PRESETS[i])) { g_preset = i; break; }
+
     if (g_pathEdited && !g_path.empty()) return;
 
     std::string base = a.proj.name;

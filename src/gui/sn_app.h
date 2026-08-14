@@ -38,9 +38,9 @@ enum DragKind {
     DRAG_TRIM_OUT,    /* its right edge                         */
     DRAG_FADE_IN,     /* the fade handle at the top left        */
     DRAG_FADE_OUT,
+    DRAG_GAIN,        /* the level line across an audio clip    */
     DRAG_SCRUB,       /* the playhead, from the ruler           */
-    DRAG_FROM_BIN,    /* a bin item on its way to the timeline  */
-    DRAG_SELECT       /* a rubber band over the timeline        */
+    DRAG_FROM_BIN     /* a bin item on its way to the timeline  */
 };
 
 enum Modal {
@@ -85,8 +85,6 @@ struct App {
     int dragBin = 0;
     double dragGrab = 0.0;     /* seconds between the pointer and the
                                   clip's start, so it does not jump      */
-    double dragStart = 0.0;
-    int dragTrack = -1;
     Vector2 dragFrom = {0, 0};
     bool dragMoved = false;
 
@@ -107,7 +105,6 @@ struct App {
     ExportSettings ex;
     ExportStatus exStatus;
     std::unique_ptr<std::thread> exThread;
-    bool exOpen = false;       /* the dialog, as opposed to a run        */
 
     /* --- the status line --- */
     std::string status;

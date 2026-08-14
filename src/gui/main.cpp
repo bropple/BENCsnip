@@ -152,7 +152,18 @@ void doSplit(App &a)
 
 void doDelete(App &a, bool ripple)
 {
-    if (a.sel.empty()) { a.complain("nothing selected"); return; }
+    if (a.sel.empty()) {
+        /* Nothing selected, but the playhead is sitting in a hole: close it.
+         * That is what someone pressing delete over a gap means, and the
+         * alternative is telling them off for it. */
+        if (closeGap(a.proj, a.playhead)) {
+            a.changed();
+            a.say("closed the gap at %s", fmtTime(a.playhead).c_str());
+        } else {
+            a.complain("nothing selected");
+        }
+        return;
+    }
 
     auto count = [&] {
         int n = 0;

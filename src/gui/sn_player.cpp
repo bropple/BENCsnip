@@ -198,7 +198,12 @@ bool Player::takeFrame(VideoFrame *out)
 {
     std::lock_guard<std::mutex> g(m_lock);
     if (!m_outNew) return false;
-    *out = m_out;
+
+    /* Moved, not copied: a 1280x720 frame is three and a half megabytes, and
+     * at sixty of those a second the copy is real work for nothing. The
+     * worker fills m_out afresh each time, so leaving it empty here is safe -
+     * and m_outNew says it is empty. */
+    *out = std::move(m_out);
     m_outNew = false;
     return true;
 }
@@ -419,7 +424,7 @@ void Player::run()
                 tmp.pts = now;
 
                 std::unique_lock<std::mutex> g(m_lock);
-                m_out = tmp;
+                m_out = std::move(tmp);
                 m_outNew = true;
                 m_frames.clear();
                 g.unlock();

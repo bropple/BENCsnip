@@ -371,6 +371,71 @@ static void test_export()
         }
     }
 
+    /* Audio only, into a container that will not take a video stream at all.
+     * The export has to notice and write one stream rather than failing at
+     * the muxer. */
+    {
+        sn::Project p = sn::newProject();
+        std::string err;
+        int a = sn::importFile(p, V1, &err);
+        int b = sn::importFile(p, A1, &err);
+        if (!a || !b) { CHECK(false, "import: %s", err.c_str()); return; }
+
+        sn::placeItem(p, a, 0.0);
+        sn::placeItem(p, b, 1.0);
+
+        sn::ExportSettings s;
+        s.path = "media/out_audio.wav";
+        s.vcodec = "";
+        s.acodec = "pcm_s16le";
+
+        sn::ExportStatus st;
+        bool ok = sn::exportTimeline(p, s, &st);
+        CHECK(ok, "audio export: %s", st.said().c_str());
+
+        if (ok) {
+            sn::MediaInfo mi;
+            CHECK(sn::probe(s.path, &mi, &err), "the wav is readable: %s", err.c_str());
+            CHECK(mi.hasAudio && !mi.hasVideo, "audio only");
+            CHECK(mi.rate == sn::RATE && mi.chans == sn::CHANS,
+                  "48 kHz stereo, got %d Hz %d ch", mi.rate, mi.chans);
+            CHECK(NEAR(mi.duration, p.duration(), 0.2), "as long as the timeline (%.2f), got %.2f",
+                  p.duration(), mi.duration);
+            remove(s.path.c_str());
+        }
+    }
+
+    /* Exporting a range rather than the whole timeline. */
+    {
+        sn::Project p = sn::newProject();
+        std::string err;
+        int a = sn::importFile(p, V1, &err);
+        if (!a) { CHECK(false, "import: %s", err.c_str()); return; }
+        sn::placeItem(p, a, 0.0);
+
+        sn::ExportSettings s;
+        s.path = "media/out_range.mp4";
+        s.width = 320;
+        s.height = 180;
+        s.fps = 30;
+        s.crf = 34;
+        s.preset = "ultrafast";
+        s.from = 2.0;
+        s.to = 5.0;
+        s.allowCopy = false;
+
+        sn::ExportStatus st;
+        bool ok = sn::exportTimeline(p, s, &st);
+        CHECK(ok, "range export: %s", st.said().c_str());
+
+        if (ok) {
+            sn::MediaInfo mi;
+            CHECK(sn::probe(s.path, &mi, &err), "readable");
+            CHECK(NEAR(mi.duration, 3.0, 0.25), "three seconds of it, got %.2f", mi.duration);
+            remove(s.path.c_str());
+        }
+    }
+
     /* The fast path: one clip, trimmed, same size, same codecs. */
     {
         sn::Project p = sn::newProject();

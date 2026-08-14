@@ -28,37 +28,6 @@ static std::string averr2(int e)
     return b;
 }
 
-std::string containerFor(const std::string &path)
-{
-    const AVOutputFormat *of = av_guess_format(nullptr, path.c_str(), nullptr);
-    if (!of || !of->name) return "";
-    return of->name;
-}
-
-std::vector<std::string> videoEncoders()
-{
-    /* Ordered by what someone actually wants out of an editor, not by what is
-     * technically superior: H.264 opens everywhere, and that is the whole
-     * argument. The rest are there for the cases where it is not enough. */
-    static const char *want[] = {"libx264", "libx265", "libsvtav1", "librav1e",
-                                 "libvpx-vp9", "libvpx", "mpeg4", "ffv1",
-                                 "libaom-av1", nullptr};
-    std::vector<std::string> out;
-    for (int i = 0; want[i]; i++)
-        if (avcodec_find_encoder_by_name(want[i])) out.push_back(want[i]);
-    return out;
-}
-
-std::vector<std::string> audioEncoders()
-{
-    static const char *want[] = {"aac", "libopus", "libmp3lame", "flac",
-                                 "pcm_s16le", "libvorbis", nullptr};
-    std::vector<std::string> out;
-    for (int i = 0; want[i]; i++)
-        if (avcodec_find_encoder_by_name(want[i])) out.push_back(want[i]);
-    return out;
-}
-
 /* The formats an encoder accepts. ffmpeg 7.1 replaced the arrays on AVCodec
  * with a query function and deprecated the fields; both spellings are here so
  * this builds against whatever the distribution ships.
