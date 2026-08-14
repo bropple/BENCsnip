@@ -1081,6 +1081,17 @@ void mark(const char *what)
     const double at =
         std::chrono::duration<double, std::milli>(sn_clock::now() - g_t0).count();
     g_marks[g_nmarks++] = Mark{what, at};
+
+    /* Printed as it happens rather than only in the summary at the end, and
+     * flushed. Startup is exactly the part of the program that can fail by
+     * not finishing - a graphics driver that never returns a context, a sound
+     * stack waiting on a device that is not there - and a report printed
+     * afterwards says nothing at all about the run that hung. The last line
+     * on screen is the phase that did not come back. */
+    if (g_timing) {
+        printf("  %8.1f ms  %s\n", at, what);
+        fflush(stdout);
+    }
 }
 
 } /* namespace */
@@ -1211,6 +1222,7 @@ static int run(int argc, char **argv)
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT | FLAG_MSAA_4X_HINT);
     SetTraceLogLevel(LOG_WARNING);
     mark("before window");
+    if (g_timing) { printf("  ... asking for the window and a GL context\n"); fflush(stdout); }
     InitWindow(1280, 760, SN_NAME " " SN_VERSION);
     mark("window + GL");
     SetWindowMinSize(900, 560);
@@ -1226,6 +1238,7 @@ static int run(int argc, char **argv)
     splashDraw(a, "starting", 0.15f);
     mark("first frame");
 
+    if (g_timing) { printf("  ... opening an audio device\n"); fflush(stdout); }
     InitAudioDevice();
     mark("audio");
     splashDraw(a, "sound", 0.35f);

@@ -336,7 +336,7 @@ jobs:
       # that is itself worth seeing in the log.
       - name: How long it takes to start
         continue-on-error: true
-        timeout-minutes: 3
+        timeout-minutes: 2
         run: |
           ls -l bencsnip.exe
           ./bencsnip.exe --timing --frames 2 --shot startup.png || true
