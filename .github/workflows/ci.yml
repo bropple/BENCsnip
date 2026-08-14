@@ -104,22 +104,13 @@ jobs:
           make testmedia
           make test
 
-      # The committed icon files are what the packaged builds use, and a
-      # half-finished `make icons` is easy not to notice. Checked by shape
-      # rather than by diffing against a fresh render: the rasteriser goes
-      # through libm, and two platforms' sin and sqrt can disagree in the last
-      # bit, which would turn one antialiased pixel into a red build.
+      # assets/icon is generated and committed, so it can go stale without
+      # anything saying so. The check is a script rather than inline here for
+      # a reason it earned: it was inline, it was not updated when the icons
+      # were renamed, and CI found that out instead of the person who renamed
+      # them.
       - name: The committed icons are the right shape
-        run: |
-          fail=0
-          for s in 16 24 32 48 64 128 256 512; do
-            f="assets/icon/star-$s.png"
-            [ -f "$f" ] || { echo "missing $f"; fail=1; continue; }
-            got=$(file "$f" | sed -n "s/.*, \([0-9]*\) x \([0-9]*\).*/\1x\2/p")
-            [ "$got" = "${s}x${s}" ] || { echo "$f is $got, expected ${s}x${s}"; fail=1; }
-          done
-          [ -f assets/icon/bencsnip.ico ] || { echo "missing bencsnip.ico"; fail=1; }
-          exit $fail
+        run: tools/check-icons.sh
 
       # A window nobody opens is a window nobody has tested. Under Xvfb this
       # creates a real GL context, loads the embedded font, decodes a file,
