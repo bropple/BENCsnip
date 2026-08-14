@@ -156,11 +156,14 @@ pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-ffmpeg mingw-w64-x86_64-raylib
 make
 ```
 
-The Windows link is `-static`: without it the executable imports
-`libstdc++-6.dll`, `libgcc_s_seh-1.dll` and `libwinpthread-1.dll`, which live
-inside an MSYS2 installation and nowhere else — it runs on the machine that
-built it and fails to start everywhere else, with a dialog naming a file the
-person has never heard of.
+The Windows link is `-static`, and it stays in force to the end of the link
+line: without that the executable imports `libstdc++-6.dll`,
+`libgcc_s_seh-1.dll` and `libwinpthread-1.dll`, which live inside an MSYS2
+installation and nowhere else — it runs on the machine that built it and fails
+to start everywhere else, with a dialog naming a file the person has never
+heard of. Against MSYS2's packaged ffmpeg, ffmpeg itself is the one thing left
+dynamic, and its DLLs travel in the archive; against a static prefix nothing
+does, and the archive is one file.
 
 ### A self-contained binary
 
