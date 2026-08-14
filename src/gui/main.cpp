@@ -1068,10 +1068,8 @@ using sn_clock = std::chrono::steady_clock;
 sn_clock::time_point g_t0;
 bool g_timing = false;
 
-/* Set by --no-msaa. See where it is used: a switch for finding out whether
- * the multisampling hint is what makes a window slow to appear, on the only
- * machine that can answer it. */
-bool g_noMsaa = false;
+/* Set by --msaa, which is off by default. See where it is used. */
+bool g_msaa = false;
 
 /* Filled in by trace_hook from raylib's own startup log. */
 char g_glVendor[128];
@@ -1185,11 +1183,13 @@ struct Splash {
     Texture2D mark = {};      /* the BENCO wordmark   */
     Texture2D icon = {};      /* the program's icon   */
     bool ready = false;
+    bool shown = false;       /* the panel has been on screen at least once */
 
-    /* No minimum time on screen, deliberately. It is up for exactly as long
-     * as there is work behind it, which on a fast machine is about a tenth of
-     * a second - and a splash screen that outstays the loading it reports is
-     * the thing this program's README makes fun of Clipchamp for. */
+    /* No minimum time on screen, deliberately: it is up for exactly as long
+     * as there is work behind it, and a splash screen that outstays the
+     * loading it reports is the thing this program's README makes fun of
+     * Clipchamp for. There is a minimum before it appears at all, though -
+     * see splashDraw. */
 };
 
 Splash g_splash;
@@ -1207,10 +1207,31 @@ void splashInit(App &a)
 }
 
 /* One frame. `frac` is how far through startup we are, and is honest rather
- * than smooth - it moves when something actually finished. */
+ * than smooth - it moves when something actually finished.
+ *
+ * The window is always cleared, so that what is on screen from the first
+ * moment is the program's own background rather than whatever was behind it.
+ * The panel on top of that only appears once startup has gone on long enough
+ * to be worth reporting - a quarter of a second - because a splash screen
+ * that comes and goes inside a blink is a flash of furniture, which is worse
+ * than nothing at all. On a machine where the whole of startup is two hundred
+ * milliseconds nobody ever sees it, and nobody should.
+ *
+ * Once it has been shown it keeps being shown, so it cannot appear for one
+ * phase and vanish for the next. */
 void splashDraw(App &a, const char *phase, float frac)
 {
     if (!g_splash.ready) return;
+
+    const double elapsed =
+        std::chrono::duration<double, std::milli>(sn_clock::now() - g_t0).count();
+    if (!g_splash.shown && elapsed < 250.0) {
+        BeginDrawing();
+        ClearBackground(SN_BG);
+        EndDrawing();
+        return;
+    }
+    g_splash.shown = true;
 
     const float W = (float)GetScreenWidth(), H = (float)GetScreenHeight();
 
@@ -1267,22 +1288,26 @@ void splashDone()
 
 static int run(int argc, char **argv)
 {
-    /* Multisampling, unless --no-msaa says otherwise.
+    /* No multisampling. It is asked for with --msaa, and there is a good
+     * reason nobody should bother.
      *
-     * It is here for the one curved thing on screen - S. Tarr's star - and it
-     * is also the first suspect for a slow start on Windows: asking for a 4x
-     * multisampled pixel format makes the driver search its formats for one,
-     * and a driver without such a format can take its time saying so. That is
-     * a suspicion and not a finding. It was tested on a Windows runner, where
-     * InitWindow does not return either way - that machine has no OpenGL
-     * worth the name and fails for its own reasons - so the experiment proved
-     * nothing and the flag stays.
+     * Asking for a 4x multisampled pixel format cost ten and a half seconds
+     * of startup on a Windows machine with an RTX 4080 and a current driver -
+     * measured, with a clock on raylib's own log: 29.7 ms at "Trying to
+     * enable MSAA x4", 10495.4 ms at the next line. The whole of that
+     * program's slow start was this one hint. It is not a broken machine
+     * either; the same driver hands over an ordinary pixel format at once.
      *
-     * Which leaves the switch, because the machine that can answer this is
-     * the one with the problem on it. Run with --timing, then again with
-     * --timing --no-msaa, and the phase list says whether this was it. */
+     * And what it bought: 703 pixels out of 972,800 - seven hundredths of one
+     * per cent of the window - because the only curved thing on screen is
+     * S. Tarr's star and the rest is rectangles and text. Both versions were
+     * rendered and compared. At four times magnification the two stars are
+     * hard to tell apart.
+     *
+     * Ten seconds for that is not a trade, so the hint is gone. The switch
+     * stays for anyone who wants it and knows what it may cost them. */
     unsigned flags = FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT;
-    if (!g_noMsaa) flags |= FLAG_MSAA_4X_HINT;
+    if (g_msaa) flags |= FLAG_MSAA_4X_HINT;
     SetConfigFlags(flags);
     /* Everything reaches the hook, which decides what to print. It has to see
      * the informational lines even when nothing is being timed, because the
@@ -1586,7 +1611,7 @@ int main(int argc, char **argv)
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--timing")) sn::g_timing = true;
-        if (!strcmp(argv[i], "--no-msaa")) sn::g_noMsaa = true;
+        if (!strcmp(argv[i], "--msaa")) sn::g_msaa = true;
     }
 
     for (int i = 1; i < argc; i++) {
@@ -1610,8 +1635,9 @@ int main(int argc, char **argv)
             printf("  --shot FILE.png    draw a few frames, write a screenshot, exit\n");
             printf("  --frames N         how many frames to draw first (default 60)\n");
             printf("  --timing           print how long each part of starting up took\n");
-            printf("  --no-msaa          ask for a plainer pixel format, which some\n");
-            printf("                     drivers are much quicker to hand over\n");
+            printf("  --msaa             ask for a multisampled pixel format. Smooths\n");
+            printf("                     the one curved thing on screen, and on some\n");
+            printf("                     drivers costs ten seconds of startup for it\n");
             return 0;
         }
     }
