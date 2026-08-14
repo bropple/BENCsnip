@@ -175,6 +175,24 @@ static void draw_clip(App &a, int idx, const Clip &c, bool video, bool hot)
         }
     }
 
+    /* Where the repeats fall. A looped clip that looks like an ordinary long
+     * clip is a clip whose content nobody can predict; a line at each wrap
+     * says "it starts again here" without a word. */
+    if (c.looped() && r.width > 24) {
+        const double cyc = c.cycle();
+        if (cyc > 0.001) {
+            for (double k = cyc; k < c.dur() - 0.001; k += cyc) {
+                const float lx = a.xAt(c.pos + k);
+                if (lx <= r.x || lx >= r.x + r.width) continue;
+                for (float yy = r.y + 2; yy < r.y + r.height - 2; yy += 6)
+                    DrawRectangle((int)lx, (int)yy, 1, 3, Color{0xcd, 0xea, 0xb0, 130});
+            }
+            if (r.width > 60)
+                sn_draw_icon(SN_I_LOOP, Rectangle{r.x + r.width - 16, r.y + 3, 11, 11},
+                             Color{0xcd, 0xea, 0xb0, 190});
+        }
+    }
+
     /* Fades, drawn as the ramp they are. */
     if (c.fadeIn > 0) {
         const float w = (float)(c.fadeIn * a.zoom);
@@ -547,8 +565,20 @@ void timelinePane(App &a, Rectangle r)
      * until the cursor changes. */
     if (inside) {
         switch (overWhat) {
+        case DRAG_TRIM_OUT: {
+            /* Past the end of the source, dragging this edge repeats the clip
+             * rather than lengthening it, and there is no system cursor that
+             * says so - so one gets drawn. */
+            const Clip *c = a.proj.clip(overClip);
+            const BinItem *b = c ? a.proj.item(c->source) : nullptr;
+            const bool beyond = c && b && b->info.duration > 0 &&
+                                (c->looped() ||
+                                 a.timeAt(m.x) > c->pos + (b->info.duration - c->in) + 1e-6);
+            if (beyond) sn_cursor_glyph(&ui, SN_I_LOOP);
+            else sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW);
+            break;
+        }
         case DRAG_TRIM_IN:
-        case DRAG_TRIM_OUT:
         case DRAG_FADE_IN:
         case DRAG_FADE_OUT: sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW); break;
         case DRAG_GAIN:     sn_cursor(&ui, MOUSE_CURSOR_RESIZE_NS); break;
@@ -563,8 +593,13 @@ void timelinePane(App &a, Rectangle r)
     /* A drag already in progress keeps its shape wherever the pointer has
      * wandered to, which is what tells you it is still holding on. */
     switch (a.drag) {
+    case DRAG_TRIM_OUT: {
+        const Clip *c = a.proj.clip(a.dragClip);
+        if (c && c->looped()) sn_cursor_glyph(&ui, SN_I_LOOP);
+        else sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW);
+        break;
+    }
     case DRAG_TRIM_IN:
-    case DRAG_TRIM_OUT:
     case DRAG_FADE_IN:
     case DRAG_FADE_OUT:
     case DRAG_SCRUB:    sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW); break;
@@ -845,7 +880,10 @@ void timelinePane(App &a, Rectangle r)
         const BinItem *b = c ? a.proj.item(c->source) : nullptr;
         if (c && b) {
             const char *verb = overWhat == DRAG_TRIM_IN    ? "drag to trim the start"
-                               : overWhat == DRAG_TRIM_OUT ? "drag to trim the end"
+                               : overWhat == DRAG_TRIM_OUT
+                                   ? (c->looped()
+                                          ? "drag to change how many times it repeats"
+                                          : "drag to trim the end, or past it to loop")
                                : overWhat == DRAG_FADE_IN  ? "drag the fade in"
                                : overWhat == DRAG_FADE_OUT ? "drag the fade out"
                                : overWhat == DRAG_GAIN     ? "drag the level up or down"

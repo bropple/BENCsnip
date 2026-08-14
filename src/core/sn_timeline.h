@@ -44,10 +44,31 @@ struct Clip {
     double fadeOut = 0.0;
     bool muted = false;
 
-    double dur() const { return out - in; }
+    /* How many times [in, out) plays. 1 is a clip; 2.5 is that clip twice
+     * and then half of it again. Dragging the tail past the end of the
+     * source is what grows it, which is the only way a four-second loop can
+     * fill a minute without four-second clips fifteen times over.
+     *
+     * The range stays the range: `in` and `out` are still source times, and
+     * still cannot leave the file. Only the timeline length changes. */
+    double repeat = 1.0;
+
+    double cycle() const { return out - in; }
+    double dur() const { return cycle() * (repeat > 0 ? repeat : 1.0); }
     double end() const { return pos + dur(); }
-    /* Source time under a timeline time inside this clip. */
-    double srcAt(double t) const { return in + (t - pos); }
+
+    /* Source time under a timeline time inside this clip, wrapped into the
+     * range when it repeats. */
+    double srcAt(double t) const
+    {
+        const double c = cycle();
+        if (c <= 0) return in;
+        double local = t - pos;
+        if (repeat > 1.0 && local >= c) local = local - c * (double)(long)(local / c);
+        return in + local;
+    }
+
+    bool looped() const { return repeat > 1.0001; }
     bool covers(double t) const { return t >= pos && t < end(); }
 };
 
@@ -73,16 +94,24 @@ struct Track {
      * moves nothing: a track set to half scale on the left is still half
      * scale on the left at 4K.
      *
-     *   scale  1 fills the canvas the way an untouched track always has -
-     *          fitted, with black bars where the aspect does not match.
-     *          0.5 is half that.
+     *   scaleX 1 fills the canvas the way an untouched track always has -
+     *   scaleY fitted, with black bars where the aspect does not match. 0.5
+     *          is half that. Two of them because the box a layer is fitted
+     *          into does not have to be square-on to the canvas: half width
+     *          and full height is a legal thing to want.
+     *   stretch what happens when the box and the picture disagree about
+     *          shape. False fits the picture inside the box and keeps its
+     *          aspect, which is nearly always right. True fills the box
+     *          exactly and distorts, which is the other thing people
+     *          sometimes actually want.
      *   x, y   0 centres it. -1 puts it hard against the left or top edge,
      *          +1 against the right or bottom. Which is exactly what side by
      *          side needs: two tracks at 0.5, one at -1 and one at +1.
      *   crop   the fraction taken off each edge of the source before any of
      *          that, so the aspect that gets fitted is the aspect of what is
      *          left. */
-    double scale = 1.0;
+    double scaleX = 1.0, scaleY = 1.0;
+    bool stretch = false;
     double x = 0.0, y = 0.0;
     double cropL = 0.0, cropR = 0.0, cropT = 0.0, cropB = 0.0;
 
@@ -189,8 +218,9 @@ bool removeClip(Project &p, const ClipRef &r, bool ripple = false);
 double moveClip(Project &p, ClipRef &r, int newTrack, double newPos);
 
 /* Drag an edge. `head` trims `in`/`pos` together, keeping the source content
- * under the mouse still; the tail trims `out`. Both stop at the source's own
- * limits and at the neighbouring clip. */
+ * under the mouse still; the tail trims `out` - and past the end of the
+ * source, grows `repeat` instead, so the clip loops. Both stop at the
+ * neighbouring clip. */
 void trimClip(Project &p, const ClipRef &r, bool head, double newEdge);
 
 /* Cut every unlocked track at t, or one clip if `only` is set. Returns how

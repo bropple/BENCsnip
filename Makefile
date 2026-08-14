@@ -38,6 +38,7 @@ CORE_SRC := src/core/sn_media.cpp \
             src/core/sn_render.cpp \
             src/core/sn_timeline.cpp \
             src/core/sn_project.cpp \
+            src/core/sn_gif.cpp \
             src/core/sn_export.cpp
 CORE_OBJ := $(CORE_SRC:.cpp=.o)
 CORE_LIB := libbencsnip.a
@@ -325,6 +326,21 @@ testmedia:
 	  -c:v libvpx-vp9 -b:v 500k -c:a libopus media/test2.webm
 	ffmpeg -y -v error -f lavfi -i sine=frequency=330:duration=6 \
 	  -c:a libmp3lame media/test3.mp3
+	@# A transparent animation, for the compositing tests: a solid gold square
+	@# in the middle of a 240x240 frame with nothing around it. Deliberately a
+	@# square rather than a star or a glyph - the test samples one point that
+	@# must be opaque and one that must be transparent, and both have to be
+	@# somewhere a person reading the test can work out on paper.
+	ffmpeg -y -v error -f lavfi -i "color=c=black:s=240x240:r=10:d=0.8" \
+	  -vf "drawbox=x=60:y=60:w=120:h=120:color=0xeecb2e:t=fill,\
+colorkey=black:0.01:0.0,format=rgba,split[a][b];\
+[a]palettegen=reserve_transparent=1:max_colors=32[p];\
+[b][p]paletteuse=alpha_threshold=128" media/overlay.gif
+	@# A smooth gradient, which is the thing a GIF palette is judged on: bars
+	@# and flat colour survive any palette at all, and a sky does not.
+	ffmpeg -y -v error -f lavfi -i \
+	  "gradients=s=320x240:c0=0x102040:c1=0xe0a070:x0=0:y0=0:x1=320:y1=240:d=2:r=10" \
+	  -frames:v 20 -c:v libx264 -pix_fmt yuv420p -crf 12 media/test5.mp4
 
 # The icon set, from assets/icon/film_camera_star.svg. Needs librsvg and
 # ImageMagick, and nothing else does - which is why the output is committed.

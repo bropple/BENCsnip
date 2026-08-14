@@ -40,7 +40,9 @@ enum DragKind {
     DRAG_FADE_OUT,
     DRAG_GAIN,        /* the level line across an audio clip    */
     DRAG_SCRUB,       /* the playhead, from the ruler           */
-    DRAG_FROM_BIN     /* a bin item on its way to the timeline  */
+    DRAG_FROM_BIN,    /* a bin item on its way to the timeline  */
+    DRAG_LAYER,       /* a track's picture, moved on the preview */
+    DRAG_LAYER_SIZE   /* ...and resized by one of its handles    */
 };
 
 enum Modal {
@@ -109,8 +111,16 @@ struct App {
     ExportStatus exStatus;
     std::unique_ptr<std::thread> exThread;
 
-    /* Which track the layout window is about. */
+    /* Which track the layout window is about, and which one is selected on
+     * the preview - the same number, so opening the window from a selection
+     * needs no extra state. */
     int layoutTrack = -1;
+
+    /* Which handle of the selected layer is being dragged: 0..7 clockwise
+     * from the top left, -1 when the body is being moved. */
+    int layerHandle = -1;
+    Rectangle layerGrab = {0, 0, 0, 0};   /* the rect when the drag began */
+    Vector2 layerFrom = {0, 0};
 
     /* --- the title in the toolbar --- */
     bool renaming = false;

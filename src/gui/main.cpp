@@ -276,14 +276,18 @@ void previewPane(App &a, Rectangle r)
         }
     }
 
+    /* Where the canvas is on screen. Worked out once and used by both the
+     * drawing and the dragging below - two copies of this arithmetic is two
+     * chances for what you drag to be somewhere other than what you see. */
+    const Rectangle dst = {std::floor(view.x + (view.width - a.previewW) * 0.5f),
+                           std::floor(view.y + (view.height - a.previewH) * 0.5f),
+                           (float)a.previewW, (float)a.previewH};
+
     if (a.preview.id && a.proj.duration() > 0) {
         /* Centred at its own size: it was rendered at the canvas's aspect, so
          * there is nothing left to letterbox. The frame drawn round it is
          * where the canvas ends, which is worth seeing when a track has been
          * pushed off the edge of it. */
-        Rectangle dst = {std::floor(view.x + (view.width - a.previewW) * 0.5f),
-                         std::floor(view.y + (view.height - a.previewH) * 0.5f),
-                         (float)a.previewW, (float)a.previewH};
         DrawTexturePro(a.preview, Rectangle{0, 0, (float)a.previewW, (float)a.previewH},
                        dst, Vector2{0, 0}, 0, WHITE);
         DrawRectangleLinesEx(dst, 1, SN_BORDER);
@@ -297,6 +301,202 @@ void previewPane(App &a, Rectangle r)
              TARR_IDLE);
         sn_text_center(&ui, SN_F_BODY, tarrLine(line), view.x + view.width * 0.5f,
                        view.y + view.height * 0.5f + 42, SN_DIM);
+    }
+
+    /* --- the layer under the pointer, and dragging it -----------------
+     *
+     * The layout window has the numbers; this has the picture. Everything
+     * here works in canvas units and converts at the edges, because the
+     * preview is drawn at whatever size fits the pane and the numbers it
+     * writes have to mean the same thing at any of them.
+     * ------------------------------------------------------------------ */
+    if (a.preview.id && a.proj.duration() > 0) {
+        const float sc = (float)a.previewW / (float)std::max(1, a.proj.width);
+        const Vector2 m = GetMousePosition();
+
+        /* Where a track's picture is on the canvas, in canvas units. The same
+         * arithmetic the renderer does - if these two ever disagree, what you
+         * drag is not what gets written. */
+        auto layerRect = [&](const Track &t) {
+            double sw = 16, sh = 9;
+            for (const Clip &c : t.clips) {
+                const BinItem *b = a.proj.item(c.source);
+                if (b && b->info.hasVideo) {
+                    sw = b->info.dispW() * std::max(0.02, 1.0 - t.cropL - t.cropR);
+                    sh = b->info.dispH() * std::max(0.02, 1.0 - t.cropT - t.cropB);
+                    break;
+                }
+            }
+            const double W = a.proj.width, H = a.proj.height;
+            const double boxW = W * std::max(0.01, t.scaleX);
+            const double boxH = H * std::max(0.01, t.scaleY);
+
+            double lw = boxW, lh = boxH;
+            if (!t.stretch) {
+                const double sa = sw / sh, ba = boxW / boxH;
+                lw = sa > ba ? boxW : boxH * sa;
+                lh = sa > ba ? boxW / sa : boxH;
+            }
+            return Rectangle{(float)((W - lw) * 0.5 * (1.0 + t.x)),
+                             (float)((H - lh) * 0.5 * (1.0 + t.y)), (float)lw,
+                             (float)lh};
+        };
+
+        auto toScreen = [&](Rectangle c) {
+            return Rectangle{dst.x + c.x * sc, dst.y + c.y * sc, c.width * sc,
+                             c.height * sc};
+        };
+
+        /* Front to back, so a click picks what a person can actually see:
+         * the list is stored back-first. */
+        int hit = -1;
+        for (int i = (int)a.proj.tracks.size() - 1; i >= 0 && hit < 0; i--) {
+            const Track &t = a.proj.tracks[i];
+            if (t.kind != TRACK_VIDEO || t.muted || !t.at(a.playhead)) continue;
+            if (CheckCollisionPointRec(m, toScreen(layerRect(t)))) hit = i;
+        }
+
+        const bool overView = CheckCollisionPointRec(m, view) && !sn_ui_blocked(&a.ui);
+        Track *sel = a.proj.track(a.layoutTrack);
+        if (sel && sel->kind != TRACK_VIDEO) sel = nullptr;
+
+        /* --- the handles of whatever is selected --- */
+        Rectangle hs[8] = {};
+        if (sel) {
+            const Rectangle s2 = toScreen(layerRect(*sel));
+            const float k = 5;
+            const float xs[3] = {s2.x, s2.x + s2.width * 0.5f, s2.x + s2.width};
+            const float ys[3] = {s2.y, s2.y + s2.height * 0.5f, s2.y + s2.height};
+            const int hx[8] = {0, 1, 2, 2, 2, 1, 0, 0};
+            const int hy[8] = {0, 0, 0, 1, 2, 2, 2, 1};
+            for (int i = 0; i < 8; i++)
+                hs[i] = Rectangle{xs[hx[i]] - k, ys[hy[i]] - k, k * 2, k * 2};
+
+            DrawRectangleLinesEx(s2, 1, SN_ACCENT);
+            for (int i = 0; i < 8; i++) {
+                DrawRectangleRec(hs[i], SN_BG);
+                DrawRectangleLinesEx(hs[i], 1, SN_ACCENT);
+            }
+        }
+
+        /* --- starting a drag --- */
+        if (overView && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && a.drag == DRAG_NONE) {
+            int grabbed = -1;
+            if (sel)
+                for (int i = 0; i < 8; i++)
+                    if (CheckCollisionPointRec(m, hs[i])) grabbed = i;
+
+            if (grabbed >= 0) {
+                a.drag = DRAG_LAYER_SIZE;
+                a.layerHandle = grabbed;
+                a.layerGrab = layerRect(*sel);
+                a.layerFrom = m;
+            } else if (hit >= 0) {
+                a.layoutTrack = hit;
+                a.drag = DRAG_LAYER;
+                a.layerHandle = -1;
+                a.layerGrab = layerRect(a.proj.tracks[hit]);
+                a.layerFrom = m;
+            } else {
+                a.layoutTrack = -1;
+            }
+        }
+
+        /* --- carrying it on --- */
+        if ((a.drag == DRAG_LAYER || a.drag == DRAG_LAYER_SIZE) && sel) {
+            if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+                const float dx = (m.x - a.layerFrom.x) / sc;
+                const float dy = (m.y - a.layerFrom.y) / sc;
+
+                Rectangle g = a.layerGrab;
+                Rectangle n = g;
+
+                if (a.drag == DRAG_LAYER) {
+                    n.x = g.x + dx;
+                    n.y = g.y + dy;
+                } else {
+                    /* Which edges this handle owns. 0..7 clockwise from the
+                     * top left, so the corners move two and the sides one. */
+                    const int h = a.layerHandle;
+                    const bool left = (h == 0 || h == 6 || h == 7);
+                    const bool right = (h == 2 || h == 3 || h == 4);
+                    const bool top = (h == 0 || h == 1 || h == 2);
+                    const bool bottom = (h == 4 || h == 5 || h == 6);
+
+                    if (left) { n.x = g.x + dx; n.width = g.width - dx; }
+                    if (right) { n.width = g.width + dx; }
+                    if (top) { n.y = g.y + dy; n.height = g.height - dy; }
+                    if (bottom) { n.height = g.height + dy; }
+
+                    /* With the aspect locked, the box keeps the shape it had
+                     * and the drag decides how big: whichever axis moved
+                     * further wins, so a corner drag feels like one gesture
+                     * rather than two arguing. */
+                    if (!sel->stretch && g.width > 1 && g.height > 1) {
+                        const float ar = g.width / g.height;
+                        if (std::fabs(n.width / g.width - 1.0f) >
+                            std::fabs(n.height / g.height - 1.0f))
+                            n.height = n.width / ar;
+                        else
+                            n.width = n.height * ar;
+                        if (left) n.x = g.x + g.width - n.width;
+                        if (top) n.y = g.y + g.height - n.height;
+                    }
+
+                    n.width = std::max(8.0f, n.width);
+                    n.height = std::max(8.0f, n.height);
+                }
+
+                /* Back into the numbers the model keeps. The scale is the box
+                 * as a fraction of the canvas; the position is where it sits
+                 * in the space left over, which is what makes -1 mean "hard
+                 * against that edge" whatever size it is. */
+                const double W = a.proj.width, H = a.proj.height;
+                sel->scaleX = n.width / W;
+                sel->scaleY = n.height / H;
+
+                const double freeW = W - n.width, freeH = H - n.height;
+                sel->x = std::fabs(freeW) < 1.0 ? 0.0 : (2.0 * n.x / freeW - 1.0);
+                sel->y = std::fabs(freeH) < 1.0 ? 0.0 : (2.0 * n.y / freeH - 1.0);
+                sel->x = std::max(-4.0, std::min(4.0, sel->x));
+                sel->y = std::max(-4.0, std::min(4.0, sel->y));
+
+                a.changed(true);
+            } else {
+                a.changed();
+                a.drag = DRAG_NONE;
+                a.layerHandle = -1;
+            }
+        }
+
+        /* --- what the pointer says it will do --- */
+        if (overView && a.drag == DRAG_NONE) {
+            int over = -1;
+            if (sel)
+                for (int i = 0; i < 8; i++)
+                    if (CheckCollisionPointRec(m, hs[i])) over = i;
+
+            if (over >= 0) {
+                static const int shape[8] = {
+                    MOUSE_CURSOR_RESIZE_NWSE, MOUSE_CURSOR_RESIZE_NS,
+                    MOUSE_CURSOR_RESIZE_NESW, MOUSE_CURSOR_RESIZE_EW,
+                    MOUSE_CURSOR_RESIZE_NWSE, MOUSE_CURSOR_RESIZE_NS,
+                    MOUSE_CURSOR_RESIZE_NESW, MOUSE_CURSOR_RESIZE_EW};
+                sn_cursor(&a.ui, shape[over]);
+            } else if (hit >= 0) {
+                sn_cursor(&a.ui, MOUSE_CURSOR_RESIZE_ALL);
+                sn_tip(&a.ui, "drag %s about, or its handles to resize it. "
+                              "Double-click for the numbers",
+                       a.proj.tracks[hit].name.c_str());
+            }
+        }
+
+        /* Double-click opens the window with the numbers in it. */
+        if (overView && hit >= 0 && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+            sn_double_click(&a.ui, 5100 + hit)) {
+            a.layoutTrack = hit;
+            a.modal = MODAL_LAYOUT;
+        }
     }
 
     if (a.player.struggling())
@@ -1152,7 +1352,7 @@ static int run(int argc, char **argv)
         sn_ui_overlay(&a.ui);
 
         /* Once, at the end, after every pane has had its say. */
-        SetMouseCursor(a.ui.cursor);
+        sn_cursor_apply(&a.ui);
 
         EndDrawing();
 

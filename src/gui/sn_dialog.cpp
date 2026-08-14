@@ -238,6 +238,7 @@ const Preset PRESETS[] = {
     {"MP4", "mp4", {"libx264", "libopenh264", "mpeg4", nullptr}, {"aac", nullptr}},
     {"WEBM", "webm", {"libvpx-vp9", "libvpx", nullptr}, {"libopus", "libvorbis", nullptr}},
     {"MKV", "mkv", {"libx264", "libopenh264", "ffv1", nullptr}, {"aac", "flac", nullptr}},
+    {"GIF", "gif", {"gif", nullptr}, {nullptr}},
     {"MP3", "mp3", {nullptr}, {"libmp3lame", nullptr}},
     {"WAV", "wav", {nullptr}, {"pcm_s16le", nullptr}},
 };
@@ -252,16 +253,21 @@ const char *pick(const char *const *names)
 }
 
 /* A preset is usable when everything it needs is present: an audio-only
- * format with no encoder for it is a button that can only disappoint. */
+ * format with no encoder for it is a button that can only disappoint. A
+ * format with no sound at all - which is GIF, and only GIF - is judged on its
+ * picture alone. */
 bool usable(const Preset &p)
 {
     if (p.video[0] && !*pick(p.video)) return false;
-    return *pick(p.audio) != 0;
+    if (p.audio[0] && !*pick(p.audio)) return false;
+    return p.video[0] || p.audio[0];
 }
 
 int g_preset = 0;
 int g_res = 0;         /* 0 source, 1 1080p, 2 720p, 3 480p */
 float g_quality = 0.6f;
+int g_gifFps = 1;      /* index into GIF_FPS below */
+const double GIF_FPS[] = {10, 15, 20, 25};
 std::string g_path;
 bool g_pathEdited = false;
 
@@ -373,6 +379,7 @@ void exportDialog(App &a)
 
     /* Size. */
     const bool videoOut = PRESETS[g_preset].video[0] != nullptr;
+    const bool isGif = videoOut && !strcmp(PRESETS[g_preset].video[0], "gif");
     if (videoOut) {
         label(a, "SIZE", r.x + 16, y);
         y += 14;
@@ -383,28 +390,44 @@ void exportDialog(App &a)
         }
         y += 34;
 
-        /* Quality. */
-        label(a, "QUALITY", r.x + 16, y);
-        y += 14;
-        Rectangle sl = {r.x + 16, y, r.width - 200, 20};
-        sn_slider(&ui, 8630, sl, &g_quality);
+        if (isGif) {
+            /* A GIF has no quality setting - it is 256 colours whatever
+             * happens - so the knob that decides how big it comes out is the
+             * frame rate. 15 to start: high enough to look like motion, and
+             * half the frames of the video it came from. */
+            label(a, "FRAME RATE", r.x + 16, y);
+            y += 14;
+            for (int i = 0; i < 4; i++) {
+                char lab[24];
+                snprintf(lab, sizeof lab, "%d FPS", (int)GIF_FPS[i]);
+                Rectangle b = {r.x + 16 + i * 76.0f, y, 70, 24};
+                if (sn_toggle(&ui, 8640 + i, b, lab, g_gifFps == i)) g_gifFps = i;
+            }
+            y += 30;
+        } else {
+            /* Quality. */
+            label(a, "QUALITY", r.x + 16, y);
+            y += 14;
+            Rectangle sl = {r.x + 16, y, r.width - 200, 20};
+            sn_slider(&ui, 8630, sl, &g_quality);
 
-        /* crf 34..14 across the slider: lower is better, and nobody should
-         * have to know that. */
-        const int crf = (int)std::lround(34 - g_quality * 20);
-        char q[96];
-        snprintf(q, sizeof q, "%s  (crf %d)",
-                 g_quality < 0.3f ? "small file" : g_quality > 0.8f ? "near-lossless"
-                                                                    : "good", crf);
-        sn_text(&ui, SN_F_TINY, q, sl.x + sl.width + 10, sl.y + 4, SN_DIM);
-        y += 30;
+            /* crf 34..14 across the slider: lower is better, and nobody should
+             * have to know that. */
+            const int crf = (int)std::lround(34 - g_quality * 20);
+            char q[96];
+            snprintf(q, sizeof q, "%s  (crf %d)",
+                     g_quality < 0.3f ? "small file" : g_quality > 0.8f ? "near-lossless"
+                                                                        : "good", crf);
+            sn_text(&ui, SN_F_TINY, q, sl.x + sl.width + 10, sl.y + 4, SN_DIM);
+            y += 30;
+        }
     }
 
     /* --- what it is going to do --- */
     a.ex.path = g_path;
     a.ex.vcodec = PRESETS[g_preset].video[0] ? pick(PRESETS[g_preset].video) : "";
     a.ex.acodec = pick(PRESETS[g_preset].audio);
-    a.ex.fps = a.proj.fps;
+    a.ex.fps = isGif ? GIF_FPS[g_gifFps] : a.proj.fps;
     a.ex.crf = videoOut ? (int)std::lround(34 - g_quality * 20) : 20;
     a.ex.from = 0;
     a.ex.to = -1;
@@ -540,8 +563,7 @@ void layoutDialog(App &a)
 
     sn_text_spaced(&ui, SN_F_SMALL, t->name.c_str(), r.x + 16, r.y + 38, SN_ACCENT);
     sn_text(&ui, SN_F_TINY,
-            "size, position and crop, relative to the canvas. The export uses the "
-            "same numbers.",
+            "or just drag it about on the preview. The export uses the same numbers.",
             r.x + 56, r.y + 40, SN_DIM);
 
     /* --- the picture of it --- */
@@ -567,12 +589,12 @@ void layoutDialog(App &a)
         sw *= keepX;
         sh *= keepY;
 
-        const double sc = std::max(0.01, t->scale);
-        const double boxW = pw * sc, boxH = ph * sc;
+        const double boxW = pw * std::max(0.01, t->scaleX);
+        const double boxH = ph * std::max(0.01, t->scaleY);
         const double sa = sw / sh, ba = boxW / boxH;
 
-        double lw = sa > ba ? boxW : boxH * sa;
-        double lh = sa > ba ? boxW / sa : boxH;
+        double lw = t->stretch ? boxW : (sa > ba ? boxW : boxH * sa);
+        double lh = t->stretch ? boxH : (sa > ba ? boxW / sa : boxH);
 
         const double ox = (pw - lw) * 0.5 * (1.0 + t->x);
         const double oy = (ph - lh) * 0.5 * (1.0 + t->y);
@@ -588,32 +610,76 @@ void layoutDialog(App &a)
     /* --- the numbers --- */
     float y = canvas.y + ph + 16;
 
-    struct Row {
-        const char *label;
-        double *v;
-        double lo, hi;
-        const char *hint;
-    } rows[] = {
-        {"SIZE", &t->scale, 0.05, 2.0, "1 fills the canvas"},
-        {"LEFT / RIGHT", &t->x, -1.0, 1.0, "-1 left edge, +1 right edge"},
-        {"UP / DOWN", &t->y, -1.0, 1.0, "-1 top, +1 bottom"},
-    };
+    /* The lock decides whether SIZE is one number or two. Locked is the
+     * common case by a mile, so it is one slider until somebody says
+     * otherwise - two sliders that always have to be dragged together are
+     * two chances to get it slightly wrong. */
+    {
+        Rectangle lock = {r.x + 400, y - 6, 144, 22};
+        if (sn_toggle(&ui, 8710, lock, t->stretch ? "FREE" : "ASPECT LOCKED",
+                      !t->stretch)) {
+            t->stretch = !t->stretch;
+            if (!t->stretch) t->scaleY = t->scaleX;   /* back to square */
+            a.changed();
+        }
+        if (CheckCollisionPointRec(GetMousePosition(), lock) && !sn_ui_blocked(&ui))
+            sn_tip(&ui, t->stretch
+                            ? "the picture fills the box and may distort"
+                            : "the picture keeps its shape inside the box");
+    }
 
-    for (int i = 0; i < 3; i++) {
-        label(a, rows[i].label, r.x + 16, y);
-
+    if (!t->stretch) {
+        label(a, "SIZE", r.x + 16, y);
         Rectangle sl = {r.x + 130, y - 4, 260, 16};
-        float v = (float)((*rows[i].v - rows[i].lo) / (rows[i].hi - rows[i].lo));
-        if (sn_slider(&ui, 8720 + i, sl, &v)) {
-            *rows[i].v = rows[i].lo + v * (rows[i].hi - rows[i].lo);
+        float v = (float)((t->scaleX - 0.05) / (2.0 - 0.05));
+        if (sn_slider(&ui, 8720, sl, &v)) {
+            t->scaleX = t->scaleY = 0.05 + v * (2.0 - 0.05);
             a.changed(true);
         }
-
         char num[32];
-        snprintf(num, sizeof num, "%+.2f", *rows[i].v);
+        snprintf(num, sizeof num, "%.2f", t->scaleX);
         sn_text(&ui, SN_F_TINY, num, sl.x + sl.width + 10, y - 2, SN_TEXT);
-        sn_text(&ui, SN_F_TINY, rows[i].hint, r.x + 16, y + 12, SN_EDGE);
+        sn_text(&ui, SN_F_TINY, "1 fills the canvas", r.x + 16, y + 12, SN_EDGE);
         y += 34;
+    } else {
+        const char *names[] = {"WIDTH", "HEIGHT"};
+        double *vals[] = {&t->scaleX, &t->scaleY};
+        for (int i = 0; i < 2; i++) {
+            label(a, names[i], r.x + 16, y);
+            Rectangle sl = {r.x + 130, y - 4, 260, 16};
+            float v = (float)((*vals[i] - 0.05) / (2.0 - 0.05));
+            if (sn_slider(&ui, 8722 + i, sl, &v)) {
+                *vals[i] = 0.05 + v * (2.0 - 0.05);
+                a.changed(true);
+            }
+            char num[32];
+            snprintf(num, sizeof num, "%.2f", *vals[i]);
+            sn_text(&ui, SN_F_TINY, num, sl.x + sl.width + 10, y - 2, SN_TEXT);
+            y += 24;
+        }
+        sn_text(&ui, SN_F_TINY, "1 fills the canvas on that axis", r.x + 16, y - 10,
+                SN_EDGE);
+        y += 10;
+    }
+
+    {
+        const char *names[] = {"LEFT / RIGHT", "UP / DOWN"};
+        double *vals[] = {&t->x, &t->y};
+        const char *hints[] = {"-1 left edge, +1 right edge", "-1 top, +1 bottom"};
+        for (int i = 0; i < 2; i++) {
+            label(a, names[i], r.x + 16, y);
+            Rectangle sl = {r.x + 130, y - 4, 260, 16};
+            float v = (float)((*vals[i] + 1.0) / 2.0);
+            if (sn_slider(&ui, 8725 + i, sl, &v)) {
+                *vals[i] = -1.0 + v * 2.0;
+                a.changed(true);
+            }
+            char num[32];
+            snprintf(num, sizeof num, "%+.2f", *vals[i]);
+            sn_text(&ui, SN_F_TINY, num, sl.x + sl.width + 10, y - 2, SN_TEXT);
+            sn_text(&ui, SN_F_TINY, hints[i], r.x + 16, y + 12, SN_EDGE);
+            y += 34;
+        }
     }
 
     /* Crop, as four numbers on one line: it is one idea, not four. */
@@ -647,7 +713,8 @@ void layoutDialog(App &a)
     for (int i = 0; i < 4; i++) {
         Rectangle b = {r.x + 130 + i * 96.0f, y - 6, 90, 22};
         if (sn_button(&ui, 8740 + i, b, presets[i].name, 1)) {
-            t->scale = presets[i].scale;
+            t->scaleX = t->scaleY = presets[i].scale;
+            t->stretch = false;
             t->x = presets[i].x;
             t->y = presets[i].y;
             a.changed();

@@ -138,10 +138,19 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
         const int srcW = std::max(1, (int)std::lround(b->info.dispW() * keepX));
         const int srcH = std::max(1, (int)std::lround(b->info.dispH() * keepY));
 
-        const double sc = std::max(0.01, tr.scale);
+        /* The box this track's picture goes in, and then the picture in it:
+         * fitted and letterboxed, or stretched to fill, depending on whether
+         * the aspect is locked. */
+        const int boxW = std::max(1, (int)std::lround(w * std::max(0.01, tr.scaleX)));
+        const int boxH = std::max(1, (int)std::lround(h * std::max(0.01, tr.scaleY)));
+
         int fw, fh, ox, oy;
-        fit(srcW, srcH, std::max(1, (int)std::lround(w * sc)),
-            std::max(1, (int)std::lround(h * sc)), &fw, &fh, &ox, &oy);
+        if (tr.stretch) {
+            fw = boxW;
+            fh = boxH;
+        } else {
+            fit(srcW, srcH, boxW, boxH, &fw, &fh, &ox, &oy);
+        }
 
         /* fit centred it inside the scaled box; what matters is where it sits
          * on the canvas, which is the free space split by x and y. -1 is hard
@@ -172,7 +181,7 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
         int x1 = std::min(w, ox + fw), y1 = std::min(h, oy + fh);
         if (x1 <= x0 || y1 <= y0) { any = true; continue; }
 
-        const int a = (int)std::lround(std::min(1.0, g) * 255.0);
+        const int fade = (int)std::lround(std::min(1.0, g) * 255.0);
 
         for (int y = y0; y < y1; y++) {
             const int sy = cy + (y - oy);
@@ -185,6 +194,17 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
                 const int sx = cx + (x - ox);
                 if (sx < 0 || sx >= m_layer.w) continue;
                 const uint8_t *p = ss + (size_t)sx * 4;
+
+                /* The source's own alpha, times the clip's fade.
+                 *
+                 * Ignoring the first of those is what made a transparent GIF
+                 * laid over a video come out as a white box: the decoder puts
+                 * the palette's colour in the transparent pixels and marks
+                 * them with alpha 0, and a blit that copies three of the four
+                 * channels is a blit that paints them anyway. */
+                int a = p[3];
+                if (fade < 255) a = a * fade / 255;
+                if (a <= 0) continue;
 
                 if (a >= 255) {
                     d[0] = p[0]; d[1] = p[1]; d[2] = p[2];

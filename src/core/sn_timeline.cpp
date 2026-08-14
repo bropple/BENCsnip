@@ -34,13 +34,15 @@ Clip *Track::at(double t)
 
 bool Track::transformed() const
 {
-    return std::fabs(scale - 1.0) > 1e-6 || std::fabs(x) > 1e-6 || std::fabs(y) > 1e-6 ||
-           cropL > 1e-6 || cropR > 1e-6 || cropT > 1e-6 || cropB > 1e-6;
+    return std::fabs(scaleX - 1.0) > 1e-6 || std::fabs(scaleY - 1.0) > 1e-6 ||
+           stretch || std::fabs(x) > 1e-6 || std::fabs(y) > 1e-6 || cropL > 1e-6 ||
+           cropR > 1e-6 || cropT > 1e-6 || cropB > 1e-6;
 }
 
 void Track::resetTransform()
 {
-    scale = 1.0;
+    scaleX = scaleY = 1.0;
+    stretch = false;
     x = y = 0.0;
     cropL = cropR = cropT = cropB = 0.0;
 }
@@ -478,10 +480,25 @@ void trimClip(Project &p, const ClipRef &r, bool head, double newEdge)
 
             double e = newEdge;
             e = std::min(e, lim);
-            e = std::min(e, x->pos + (srcDur - x->in));
             e = std::max(e, x->pos + minDur);
 
-            x->out = x->in + (e - x->pos);
+            /* Up to the end of the source, the tail moves `out` - the clip is
+             * simply longer. Past it, `out` has nowhere to go and the clip
+             * repeats instead: four seconds of footage dragged out to a
+             * minute is the same four seconds fifteen times, which is the
+             * only sane reading of the gesture and saves doing it by hand.
+             *
+             * `in` and `out` never leave the file either way. */
+            const double natural = x->pos + (srcDur - x->in);
+
+            if (e <= natural + EPS) {
+                x->out = x->in + (e - x->pos);
+                x->repeat = 1.0;
+            } else {
+                x->out = x->in + (srcDur - x->in);
+                const double c = x->cycle();
+                x->repeat = c > EPS ? (e - x->pos) / c : 1.0;
+            }
         }
 
         x->fadeIn = std::min(x->fadeIn, x->dur());

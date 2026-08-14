@@ -109,6 +109,12 @@ typedef struct sn_ui {
      * whichever drew last wins, which is a cursor that flickers between two
      * shapes depending on paint order. */
     int cursor;
+
+    /* A shape the operating system does not have. There is no "this will
+     * loop" cursor in any standard set, so when one is asked for the system
+     * pointer is hidden and the glyph is drawn in its place. -1 is nobody,
+     * which is nearly always. */
+    int cursorGlyph;
 } sn_ui;
 
 void sn_ui_init(sn_ui *ui);
@@ -124,6 +130,7 @@ void sn_tip(sn_ui *ui, const char *fmt, ...);
  * frame wins: a resize beats a move beats a hand beats the arrow, because
  * they are asked for in that order by things that overlap. */
 void sn_cursor(sn_ui *ui, int shape);
+
 
 /* ------------------------------------------------------------------ *
  * Text
@@ -157,10 +164,18 @@ typedef enum {
     SN_I_EXPORT, SN_I_UNDO, SN_I_REDO, SN_I_EYE, SN_I_EYE_OFF, SN_I_SPEAKER,
     SN_I_MUTE, SN_I_LOCK, SN_I_UNLOCK, SN_I_ZOOM_IN, SN_I_ZOOM_OUT, SN_I_FIT,
     SN_I_LINK, SN_I_UNLINK, SN_I_INFO, SN_I_X, SN_I_CHECK, SN_I_SNAP,
-    SN_I_UP, SN_I_DOWN, SN_I_CROP
+    SN_I_UP, SN_I_DOWN, SN_I_CROP, SN_I_LOOP
 } sn_icon;
 
 void sn_draw_icon(sn_icon which, Rectangle r, Color c);
+/* Draw this icon as the pointer, instead of a system cursor. Cleared every
+ * frame like everything else here. */
+void sn_cursor_glyph(sn_ui *ui, sn_icon which);
+
+/* Called by the window at the end of the frame: sets the system cursor, or
+ * hides it and draws the glyph. */
+void sn_cursor_apply(sn_ui *ui);
+
 int sn_icon_button(sn_ui *ui, int id, Rectangle r, sn_icon which, int enabled,
                    int lit, const char *tip);
 

@@ -129,11 +129,38 @@ void sn_cursor(sn_ui *ui, int shape)
     if (cursor_rank(shape) > cursor_rank(ui->cursor)) ui->cursor = shape;
 }
 
+void sn_cursor_glyph(sn_ui *ui, sn_icon which)
+{
+    ui->cursorGlyph = (int)which;
+}
+
+void sn_cursor_apply(sn_ui *ui)
+{
+    /* Hidden and shown only when it changes. Asking every frame is a call
+     * into the window system sixty times a second to say what it already
+     * knows, and on some platforms a visible flicker. */
+    static int hidden = 0;
+
+    if (ui->cursorGlyph >= 0) {
+        if (!hidden) { HideCursor(); hidden = 1; }
+        Vector2 m = GetMousePosition();
+        Rectangle r = {m.x - 11, m.y - 11, 22, 22};
+        /* A dark backing, because the pointer travels over a bright preview
+         * and a phosphor-green glyph on a yellow bar is not a pointer. */
+        DrawCircleV(Vector2{m.x, m.y}, 13, Color{0x06, 0x0a, 0x05, 190});
+        sn_draw_icon((sn_icon)ui->cursorGlyph, r, SN_TEXT);
+    } else {
+        if (hidden) { ShowCursor(); hidden = 0; }
+        SetMouseCursor(ui->cursor);
+    }
+}
+
 void sn_ui_frame(sn_ui *ui)
 {
     ui->tip[0] = 0;
     ui->suppress = 0;
     ui->cursor = MOUSE_CURSOR_DEFAULT;
+    ui->cursorGlyph = -1;
     /* A drag ends when the button comes up, wherever the pointer is. Leaving
      * `active` set past the release is how a control ends up following the
      * mouse around with nothing held down. */
@@ -450,6 +477,13 @@ void sn_draw_icon(sn_icon which, Rectangle r, Color c)
         break;
     case SN_I_DOWN:
         tri(V(-0.6f, -0.35f), V(0.6f, -0.35f), V(0.0f, 0.45f));
+        break;
+    case SN_I_LOOP:
+        /* Three quarters of a ring with a head on the end: the arrow that
+         * every program in the world draws for "again". */
+        DrawRing(Vector2{cx, cy}, 0.5f * s - th * 0.5f, 0.5f * s + th * 0.5f, 20, 320,
+                 28, c);
+        tri(V(0.28f, -0.72f), V(0.92f, -0.52f), V(0.42f, -0.06f));
         break;
     case SN_I_CROP:
         /* Two overlapping corners, which is what a crop tool has looked like

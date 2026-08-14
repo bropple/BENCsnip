@@ -3,6 +3,7 @@
  */
 
 #include "sn_export.h"
+#include "sn_gif.h"
 #include "sn_render.h"
 
 #include <algorithm>
@@ -139,7 +140,21 @@ int64_t estimateSize(const Project &p, const ExportSettings &s, bool *exact)
             if (t.kind == TRACK_AUDIO && b->info.hasAudio) anyAudio = true;
         }
 
-    if (anyVideo && !s.vcodec.empty() && s.vcodec != "none") {
+    if (anyVideo && s.vcodec == "gif") {
+        /* A GIF has no quality setting and no bitrate; it is one byte per
+         * pixel through LZW, and what that compresses to depends entirely on
+         * the footage. The test clips here come out around 0.5 bits per pixel
+         * and dithered camera footage runs several times that, so 1.5 is a
+         * figure between them rather than one measured from anything - which
+         * is why this number is only ever shown after the word "about".
+         *
+         * It is here at all because a GIF is the one format where the answer
+         * can be a hundred times what somebody expected: ten seconds of 1080p
+         * is tens of megabytes, and it is better to see that in the dialog
+         * than in the folder afterwards. */
+        const double px = (double)s.width * s.height * (s.fps > 0 ? s.fps : 30.0);
+        bits += (int64_t)(px * span * 1.5);
+    } else if (anyVideo && !s.vcodec.empty() && s.vcodec != "none") {
         if (s.vbitrate > 0) {
             bits += (int64_t)(s.vbitrate * span);
         } else {
@@ -382,10 +397,18 @@ static bool render(const Project &p, const ExportSettings &s, ExportStatus *st)
             const AVPixelFormat *pf = SN_SUPPORTED(AVPixelFormat, v.ctx, codec,
                                                    AV_CODEC_CONFIG_PIX_FORMAT, pix_fmts);
             if (pf) {
-                bool has420 = false;
-                for (int i = 0; pf[i] != AV_PIX_FMT_NONE; i++)
+                bool has420 = false, hasPal = false;
+                for (int i = 0; pf[i] != AV_PIX_FMT_NONE; i++) {
                     if (pf[i] == AV_PIX_FMT_YUV420P) has420 = true;
-                if (!has420) v.ctx->pix_fmt = pf[0];
+                    if (pf[i] == AV_PIX_FMT_PAL8) hasPal = true;
+                }
+                /* Taking whatever the encoder lists first is right for nearly
+                 * everything and wrong for exactly one format that matters.
+                 * The gif encoder lists rgb8 first - a fixed 3-3-2 palette,
+                 * which is what made every GIF out of this program come back
+                 * banded - and pal8, which is 256 colours somebody has to
+                 * choose. Choosing them is the whole of sn_gif.cpp. */
+                if (!has420) v.ctx->pix_fmt = hasPal ? AV_PIX_FMT_PAL8 : pf[0];
             }
 
             if (s.vbitrate > 0) v.ctx->bit_rate = s.vbitrate;
@@ -415,10 +438,14 @@ static bool render(const Project &p, const ExportSettings &s, ExportStatus *st)
             v.frm->height = v.ctx->height;
             if (av_frame_get_buffer(v.frm, 0) < 0) { st->say("out of memory"); ok = false; }
 
-            v.sws = sws_getContext(v.ctx->width, v.ctx->height, AV_PIX_FMT_RGBA,
-                                   v.ctx->width, v.ctx->height, v.ctx->pix_fmt,
-                                   SWS_BILINEAR, nullptr, nullptr, nullptr);
-            if (!v.sws) { st->say("cannot convert to the encoder's pixel format"); ok = false; }
+            /* swscale has no pal8 output - a palette is a decision, not a
+             * conversion - so that one frame format is filled in by hand. */
+            if (v.ctx->pix_fmt != AV_PIX_FMT_PAL8) {
+                v.sws = sws_getContext(v.ctx->width, v.ctx->height, AV_PIX_FMT_RGBA,
+                                       v.ctx->width, v.ctx->height, v.ctx->pix_fmt,
+                                       SWS_BILINEAR, nullptr, nullptr, nullptr);
+                if (!v.sws) { st->say("cannot convert to the encoder's pixel format"); ok = false; }
+            }
         }
     }
 
@@ -500,6 +527,50 @@ static bool render(const Project &p, const ExportSettings &s, ExportStatus *st)
         if (rc < 0) { st->say("cannot start the file: " + averr2(rc)); ok = false; }
     }
 
+    /* --- the palette, for the one format that needs one ---
+     *
+     * Before any of it is encoded, because the colours have to be chosen from
+     * the whole export rather than from whichever frame happened to be first:
+     * a clip that starts on black and ends in daylight would otherwise get a
+     * palette of blacks and spend the rest of its length in the dark.
+     *
+     * Sixteen frames spread across the range, subsampled - the colours in a
+     * frame do not change much between one and the next, and a palette built
+     * from every pixel of every frame is the same palette for a hundred times
+     * the work. */
+    Palette pal;
+    bool dither = false;
+
+    if (ok && v.ctx && v.ctx->pix_fmt == AV_PIX_FMT_PAL8) {
+        st->say("choosing colours");
+
+        const int samples = 16;
+        const int stepPx = std::max(1, (v.ctx->width * v.ctx->height) / 24000);
+
+        std::vector<uint8_t> pool;
+        VideoFrame look;
+
+        for (int i = 0; i < samples && !st->cancel.load(); i++) {
+            const double t = s.from + span * (i + 0.5) / samples;
+            if (!ren.videoAt(t, v.ctx->width, v.ctx->height, &look)) continue;
+
+            const size_t n = (size_t)look.w * look.h;
+            for (size_t k = 0; k < n; k += stepPx) {
+                const uint8_t *p = look.rgba.data() + k * 4;
+                pool.insert(pool.end(), p, p + 4);
+            }
+        }
+
+        buildPalette(pool.data(), pool.size() / 4, 256, &pal);
+
+        /* Dither only when the palette had to approximate. A cartoon, a
+         * screen recording or a title card usually has fewer than 256 colours
+         * in it, the palette then holds every one of them exactly, and
+         * dithering flat colour is how a clean GIF gets speckled and twice
+         * the size. */
+        dither = pal.n >= 256;
+    }
+
     /* --- the loop --- */
     AVPacket *pkt = ok ? av_packet_alloc() : nullptr;
     VideoFrame pic;
@@ -525,9 +596,27 @@ static bool render(const Project &p, const ExportSettings &s, ExportStatus *st)
             ren.videoAt(vt, v.ctx->width, v.ctx->height, &pic);
 
             if (av_frame_make_writable(v.frm) < 0) { ok = false; break; }
-            const uint8_t *src[4] = {pic.rgba.data(), nullptr, nullptr, nullptr};
-            int stride[4] = {v.ctx->width * 4, 0, 0, 0};
-            sws_scale(v.sws, src, stride, 0, v.ctx->height, v.frm->data, v.frm->linesize);
+
+            if (v.sws) {
+                const uint8_t *src[4] = {pic.rgba.data(), nullptr, nullptr, nullptr};
+                int stride[4] = {v.ctx->width * 4, 0, 0, 0};
+                sws_scale(v.sws, src, stride, 0, v.ctx->height, v.frm->data, v.frm->linesize);
+            } else {
+                /* pal8: an index per pixel in data[0], and the palette itself
+                 * in data[1] as 256 words of ARGB. It goes in on every frame
+                 * rather than once, because make_writable is entitled to hand
+                 * back a different buffer whenever the encoder is still
+                 * holding the last one. */
+                quantise(pic.rgba.data(), v.ctx->width, v.ctx->height, pal,
+                         v.frm->data[0], v.frm->linesize[0], dither);
+
+                uint32_t *entries = (uint32_t *)v.frm->data[1];
+                for (int i = 0; i < 256; i++) {
+                    const uint8_t *c = pal.rgb[i < pal.n ? i : 0];
+                    entries[i] = 0xff000000u | ((uint32_t)c[0] << 16) |
+                                 ((uint32_t)c[1] << 8) | c[2];
+                }
+            }
             v.frm->pts = v.n++;
 
             rc = avcodec_send_frame(v.ctx, v.frm);

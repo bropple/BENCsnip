@@ -154,6 +154,15 @@ private:
 
     double m_vpos = -1.0;
 
+    /* Whether the frame in m_v.frm is still the one we last handed out.
+     *
+     * Kept, rather than unreffed the moment it has been converted, so that
+     * asking for the same moment twice gives the same picture. Without it the
+     * decoder is already sitting on that frame, so the second call decodes
+     * the next one - and a paused preview walks forward a frame every time an
+     * edit asks it to redraw. */
+    bool m_vhave = false;
+
     /* Audio held back between audioAt calls: whatever the last decoded frame
      * had left over after the mixer took its block. Without it every call
      * would discard the remainder of a 1024-sample frame, and the result is a

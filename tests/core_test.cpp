@@ -40,6 +40,8 @@ static int checks = 0;
 static const char *V1 = "media/test1.mp4";      /* 8 s, 1280x720, 30 fps */
 static const char *V2 = "media/test2.webm";     /* 5 s, 640x480, 25 fps  */
 static const char *A1 = "media/test3.mp3";      /* 6 s, audio only       */
+static const char *G1 = "media/overlay.gif";   /* 0.8 s, transparent    */
+static const char *V5 = "media/test5.mp4";      /* 2 s, a gradient       */
 
 static bool have(const char *p)
 {
@@ -109,6 +111,39 @@ static void test_timeline()
     sn::trimClip(p, c0, false, 999.0);
     CHECK(p.clip(c0)->out <= 10.0 + 1e-9, "cannot trim past the end of the source, out=%f",
           p.clip(c0)->out);
+
+    /* Dragging the tail past the end of the source loops it rather than
+     * refusing to move: the clip gets longer, the range it plays does not,
+     * and the source time wraps. */
+    {
+        sn::Project L = sn::newProject();
+        int it = fakeItem(L, 4.0, true, false);
+        sn::placeItem(L, it, 0.0);
+        sn::ClipRef lr{0, L.tracks[0].clips[0].id};
+
+        sn::trimClip(L, lr, false, 10.0);          /* well past four seconds */
+        const sn::Clip *lc = L.clip(lr);
+
+        CHECK(NEAR(lc->dur(), 10.0, 1e-6), "the clip is as long as it was dragged, got %f",
+              lc->dur());
+        CHECK(NEAR(lc->out, 4.0, 1e-6), "but the range it plays stops at the file's end");
+        CHECK(lc->looped(), "and it says it is looping");
+        CHECK(NEAR(lc->repeat, 2.5, 1e-6), "two and a half times, got %f", lc->repeat);
+
+        /* Source time wraps: five seconds in is one second into the second
+         * pass, not five seconds into a four second file. */
+        CHECK(NEAR(lc->srcAt(5.0), 1.0, 1e-6), "the source time wraps, got %f",
+              lc->srcAt(5.0));
+        CHECK(NEAR(lc->srcAt(9.0), 1.0, 1e-6), "and again on the third pass, got %f",
+              lc->srcAt(9.0));
+        CHECK(NEAR(lc->srcAt(2.0), 2.0, 1e-6), "the first pass is unchanged");
+
+        /* Dragging it back inside the file stops the looping. */
+        sn::trimClip(L, lr, false, 3.0);
+        lc = L.clip(lr);
+        CHECK(!lc->looped(), "dragging it back in stops the repeat");
+        CHECK(NEAR(lc->dur(), 3.0, 1e-6), "and it is just a shorter clip again");
+    }
 
     /* Head trim keeps the content under the mouse still. */
     double srcUnder = p.clip(c0)->srcAt(1.0);
@@ -272,9 +307,9 @@ static void test_render()
         sn::placeItem(sbs, ia, 0.0, 0, -2);          /* video only, back track */
         sn::placeItem(sbs, ib, 0.0, 1, -2);          /* video only, front      */
 
-        sbs.tracks[0].scale = 0.5;
+        sbs.tracks[0].scaleX = sbs.tracks[0].scaleY = 0.5;
         sbs.tracks[0].x = -1.0;                      /* hard left  */
-        sbs.tracks[1].scale = 0.5;
+        sbs.tracks[1].scaleX = sbs.tracks[1].scaleY = 0.5;
         sbs.tracks[1].x = 1.0;                       /* hard right */
 
         sn::Renderer r2(&sbs);
@@ -291,6 +326,75 @@ static void test_render()
         CHECK(lit(480, 180), "the right half is drawn");
         CHECK(!lit(320, 10), "and the top of the canvas is still black");
         CHECK(!lit(320, 350), "as is the bottom");
+    }
+
+    /* Transparency. A GIF with an alpha channel laid over a video has to show
+     * the video through it - the decoder puts a colour in those pixels and
+     * marks them alpha 0, and a blit that copies three channels of four
+     * paints that colour anyway. Which is how a rotating logo arrives as a
+     * white box. */
+    if (have(G1)) {
+        sn::Project al = sn::newProject();
+        std::string e4;
+        int bg = sn::importFile(al, V1, &e4);
+        int ov = sn::importFile(al, G1, &e4);
+        al.width = 320;
+        al.height = 180;
+
+        sn::placeItem(al, bg, 0.0, 0, -2);              /* the back  */
+        const int front = sn::addTrack(al, sn::TRACK_VIDEO, 1);
+        sn::placeItem(al, ov, 0.0, front, -2);          /* the front */
+        al.tracks[front].scaleX = al.tracks[front].scaleY = 0.5;
+
+        /* Rendered twice: once with the overlay hidden, once with it shown.
+         *
+         * The test is then "a transparent pixel is identical to what was
+         * behind it", which needs to know no colours at all. The first
+         * version of this checked that the pixel was "not black" - and the
+         * transparent entry in a GIF's palette is usually white, so it passed
+         * whether the alpha was honoured or not. It tested nothing, and said
+         * it tested transparency. */
+        sn::Renderer r4(&al);
+        sn::VideoFrame behind, both;
+
+        al.tracks[front].muted = true;
+        CHECK(r4.videoAt(0.2, 320, 180, &behind), "the background draws on its own");
+        al.tracks[front].muted = false;
+        CHECK(r4.videoAt(0.2, 320, 180, &both), "the overlay draws");
+
+        auto at4 = [&](const sn::VideoFrame &f, int x, int y) {
+            return f.rgba.data() + ((size_t)y * f.w + x) * 4;
+        };
+
+        /* Where those two points are, worked out rather than guessed at.
+         *
+         * The overlay is a 240x240 square source at half scale on a 320x180
+         * canvas: fitted into 160x90 it becomes 90x90, centred, so it covers
+         * x 115..205 and y 45..135. Its gold square is the middle half of the
+         * source, so it lands at x 137..182, y 67..112.
+         *
+         * The first sample is therefore inside the layer and outside the
+         * gold - transparent, and the whole point of the test. The earlier
+         * version of this sampled a point outside the layer altogether, which
+         * showed the video whether alpha worked or not, and passed for a
+         * reason that had nothing to do with what it claimed to check. */
+        const uint8_t *clearBg = at4(behind, 120, 50);
+        const uint8_t *clearUp = at4(both, 120, 50);
+        const uint8_t *solidBg = at4(behind, 160, 90);
+        const uint8_t *solidUp = at4(both, 160, 90);
+
+        CHECK(clearUp[0] == clearBg[0] && clearUp[1] == clearBg[1] &&
+                  clearUp[2] == clearBg[2],
+              "a transparent pixel is exactly what was behind it: got %d,%d,%d, "
+              "behind is %d,%d,%d",
+              clearUp[0], clearUp[1], clearUp[2], clearBg[0], clearBg[1], clearBg[2]);
+
+        CHECK(solidUp[0] != solidBg[0] || solidUp[1] != solidBg[1] ||
+                  solidUp[2] != solidBg[2],
+              "and an opaque one is not");
+        CHECK(solidUp[0] > 180 && solidUp[1] > 150 && solidUp[2] < 110,
+              "it is the overlay's own colour (%d,%d,%d)", solidUp[0], solidUp[1],
+              solidUp[2]);
     }
 
     /* Cropping changes the shape that gets fitted, so a source cropped to a
@@ -590,6 +694,78 @@ static void test_export()
             CHECK(sn::probe(s.path, &mi, &err), "the output is readable");
             CHECK(mi.vcodec == "h264", "the video was not re-encoded, got %s", mi.vcodec.c_str());
             CHECK(NEAR(mi.duration, 4.0, 0.5), "about four seconds, got %.2f", mi.duration);
+            remove(s.path.c_str());
+        }
+    }
+
+    /* --- a GIF, which is the one output that has to choose its own colours ---
+     *
+     * Written and then read back and compared against the frames it was made
+     * of, because the failure this is here for does not look like a failure
+     * anywhere else: the file is valid, the right length, the right size, and
+     * the picture in it is wrong. Handing the encoder the pixel format it
+     * lists first gets a fixed 3-3-2 palette and a mean channel error near 17
+     * on a gradient, which is a visibly banded GIF and a passing test in every
+     * other sense. */
+    if (have(V5)) {
+        sn::Project p = sn::newProject();
+        std::string err;
+        int id = sn::importFile(p, V5, &err);
+        if (!id) { CHECK(false, "import: %s", err.c_str()); return; }
+        sn::placeItem(p, id, 0.0);
+
+        const int W = 320, H = 240;
+        p.width = W; p.height = H; p.fps = 10;
+
+        sn::ExportSettings s;
+        s.path = "media/out_gif.gif";
+        s.width = W; s.height = H; s.fps = 10;
+        s.vcodec = "gif";
+        s.acodec = "";
+        s.allowCopy = false;
+        s.from = 0; s.to = 2.0;
+
+        sn::ExportStatus st;
+        const bool ok = sn::exportTimeline(p, s, &st);
+        CHECK(ok, "gif: %s", st.said().c_str());
+
+        if (ok) {
+            sn::MediaInfo mi;
+            CHECK(sn::probe(s.path, &mi, &err), "the gif is readable: %s", err.c_str());
+            CHECK(mi.width == W && mi.height == H, "at %dx%d, got %dx%d", W, H,
+                  mi.width, mi.height);
+
+            sn::Source *src = sn::Source::open(s.path, &err);
+            CHECK(src != nullptr, "and decodes: %s", err.c_str());
+
+            if (src) {
+                sn::Renderer ren(&p);
+                sn::VideoFrame want, got;
+                double sum = 0;
+                long n = 0;
+
+                for (int i = 0; i < 10; i++) {
+                    const double t = (i + 0.5) / 10.0;
+                    if (!ren.videoAt(t, W, H, &want)) continue;
+                    if (!src->frameAt(t, &got, W, H)) continue;
+                    for (long k = 0; k < (long)W * H; k++) {
+                        const uint8_t *a = want.rgba.data() + k * 4;
+                        const uint8_t *b = got.rgba.data() + k * 4;
+                        for (int c = 0; c < 3; c++)
+                            sum += std::fabs((double)a[c] - (double)b[c]);
+                        n += 3;
+                    }
+                }
+                const double e = n ? sum / n : 999.0;
+
+                /* Measured at 1.5 with a palette chosen from the footage and
+                 * 16.9 without. Anything under 6 is a palette that was looked
+                 * at; the gap is wide enough that this does not fail over a
+                 * rounding change in the dither. */
+                CHECK(e < 6.0, "the gif is close to the frames it was made of "
+                               "(mean channel error %.2f, 3-3-2 scores 16.9)", e);
+                delete src;
+            }
             remove(s.path.c_str());
         }
     }

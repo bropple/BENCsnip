@@ -457,15 +457,18 @@ bool Source::nextVideo(VideoFrame *out, int outW, int outH)
     if (t >= 0) m_vpos = t;
     out->pts = m_vpos;
 
-    bool ok = convert(m_v.frm, out, outW, outH);
-    av_frame_unref(FRM(m_v));
-    return ok;
+    /* The frame stays referenced - see m_vhave. avcodec_receive_frame unrefs
+     * the destination itself before writing the next one, so holding it costs
+     * nothing but the buffer it was going to keep anyway. */
+    m_vhave = true;
+    return convert(m_v.frm, out, outW, outH);
 }
 
 void Source::seekVideo(double t)
 {
     demux_seek(m_v, t);
     m_vpos = -1.0;
+    m_vhave = false;
 }
 
 bool Source::frameAt(double t, VideoFrame *out, int outW, int outH)
@@ -477,10 +480,20 @@ bool Source::frameAt(double t, VideoFrame *out, int outW, int outH)
      * Two seconds is longer than most GOPs and much shorter than the time a
      * seek plus a re-decode costs, so decoding through is the cheaper answer
      * inside that window. */
+    const double eps = m_info.fps > 0 ? 0.5 / m_info.fps : 0.02;
+    const double frameDur = m_info.fps > 0 ? 1.0 / m_info.fps : 0.04;
+
+    /* Still holding the frame this moment wants: hand it over again rather
+     * than decoding the next one. Two calls at the same time have to give the
+     * same picture, and the decoder has no way to go back one frame short of
+     * seeking. */
+    if (m_vhave && m_vpos >= t - eps && m_vpos <= t + frameDur) {
+        out->pts = m_vpos;
+        return convert(m_v.frm, out, outW, outH);
+    }
+
     const double gap = t - m_vpos;
     if (m_vpos < 0.0 || gap < -0.001 || gap > 2.0) seekVideo(t);
-
-    const double eps = m_info.fps > 0 ? 0.5 / m_info.fps : 0.02;
 
     bool haveAny = false;
     for (;;) {
@@ -492,9 +505,8 @@ bool Source::frameAt(double t, VideoFrame *out, int outW, int outH)
 
         if (m_vpos >= t - eps) {
             out->pts = m_vpos;
-            bool ok = convert(m_v.frm, out, outW, outH);
-            av_frame_unref(FRM(m_v));
-            return ok;
+            m_vhave = true;
+            return convert(m_v.frm, out, outW, outH);
         }
 
         /* Not there yet. Keep the last one anyway: at the end of a file
@@ -502,11 +514,9 @@ bool Source::frameAt(double t, VideoFrame *out, int outW, int outH)
          * beats showing nothing. */
         if (m_v.eof || m_v.draining) {
             out->pts = m_vpos;
-            bool ok = convert(m_v.frm, out, outW, outH);
-            av_frame_unref(FRM(m_v));
-            return ok;
+            m_vhave = true;
+            return convert(m_v.frm, out, outW, outH);
         }
-        av_frame_unref(FRM(m_v));
     }
 
     return haveAny ? false : false;

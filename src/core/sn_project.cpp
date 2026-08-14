@@ -130,12 +130,13 @@ bool saveProject(const Project &p, const std::string &path, std::string *err)
          * a line it does not recognise; one that had to parse four more
          * numbers before the track's name would read the name as a number. */
         if (t.transformed())
-            fprintf(f, "xform %.6f %.6f %.6f %.6f %.6f %.6f %.6f\n", t.scale, t.x, t.y,
-                    t.cropL, t.cropR, t.cropT, t.cropB);
+            fprintf(f, "xform %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %d\n", t.scaleX,
+                    t.x, t.y, t.cropL, t.cropR, t.cropT, t.cropB, t.scaleY,
+                    t.stretch ? 1 : 0);
         for (const Clip &c : t.clips)
-            fprintf(f, "clip %d %d %d %.6f %.6f %.6f %.4f %.4f %.4f %d\n",
+            fprintf(f, "clip %d %d %d %.6f %.6f %.6f %.4f %.4f %.4f %d %.6f\n",
                     c.id, c.source, c.link, c.in, c.out, c.pos, c.gain,
-                    c.fadeIn, c.fadeOut, c.muted ? 1 : 0);
+                    c.fadeIn, c.fadeOut, c.muted ? 1 : 0, c.repeat);
     }
 
     fclose(f);
@@ -225,15 +226,27 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
         } else if (!strncmp(line, "xform ", 6)) {
             if (trackAt < 0) continue;
             Track &t = p.tracks[trackAt];
-            sscanf(line + 6, "%lf %lf %lf %lf %lf %lf %lf", &t.scale, &t.x, &t.y,
-                   &t.cropL, &t.cropR, &t.cropT, &t.cropB);
+            int stretch = 0;
+            /* The last two arrived later. A file written before they existed
+             * has one scale for both axes and no stretching, which is what
+             * these defaults say. */
+            const int got = sscanf(line + 6, "%lf %lf %lf %lf %lf %lf %lf %lf %d",
+                                   &t.scaleX, &t.x, &t.y, &t.cropL, &t.cropR, &t.cropT,
+                                   &t.cropB, &t.scaleY, &stretch);
+            if (got < 8) t.scaleY = t.scaleX;
+            t.stretch = stretch != 0;
         } else if (!strncmp(line, "clip ", 5)) {
             if (trackAt < 0) continue;
             Clip c;
             int muted = 0;
-            if (sscanf(line + 5, "%d %d %d %lf %lf %lf %lf %lf %lf %d",
+            /* The repeat count is the eleventh field and arrived later, so a
+             * file without one is a file from before looping existed and
+             * means once. */
+            if (sscanf(line + 5, "%d %d %d %lf %lf %lf %lf %lf %lf %d %lf",
                        &c.id, &c.source, &c.link, &c.in, &c.out, &c.pos,
-                       &c.gain, &c.fadeIn, &c.fadeOut, &muted) < 10) continue;
+                       &c.gain, &c.fadeIn, &c.fadeOut, &muted, &c.repeat) < 10)
+                continue;
+            if (!(c.repeat > 0)) c.repeat = 1.0;
             c.muted = muted != 0;
             if (c.dur() > 0) p.tracks[trackAt].clips.push_back(c);
         }
