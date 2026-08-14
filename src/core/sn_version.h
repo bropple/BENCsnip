@@ -10,7 +10,7 @@
 
 #define SN_VERSION_MAJOR 0
 #define SN_VERSION_MINOR 1
-#define SN_VERSION_PATCH 0
+#define SN_VERSION_PATCH 1
 
 #define SN_STR2(x) #x
 #define SN_STR(x)  SN_STR2(x)

@@ -46,6 +46,38 @@ if [ -z "${NOSTRIP:-}" ]; then
 fi
 
 # What the binary is actually under, said in the archive rather than only in a
+# release note nobody keeps. The text itself is in tools/binary-licence.sh,
+# which the .app builder calls as well - one notice, two places it has to
+# travel to.
+if [ -f vendor/ffmpeg/CONFIGURE ]; then
+    cp vendor/ffmpeg/CONFIGURE "$D/ffmpeg-configure.txt"
+fi
+tools/binary-licence.sh "$PLATFORM" "$VERSION" "$D/BINARY-LICENCE.txt" >/dev/null
+
+case "$PLATFORM" in *windows*) BIN=bencsnip.exe ;; esac
+[ -f "$BIN" ] || { echo "no $BIN - run make first" >&2; exit 1; }
+
+D="bencsnip-$VERSION-$PLATFORM"
+rm -rf "$D" dist
+mkdir -p "$D" dist
+
+cp "$BIN" README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
+
+# Stripped, unless asked otherwise. The build carries -g by default, which is
+# right for developing and wrong for a download: it is two thirds of a 27 MB
+# executable, and nobody debugging a crash report has the matching objects
+# anyway. NOSTRIP=1 keeps the symbols for a build meant to be debugged.
+if [ -z "${NOSTRIP:-}" ]; then
+    before=$(wc -c < "$D/$BIN")
+    case "$PLATFORM" in
+        *macos*) strip -x "$D/$BIN" 2>/dev/null || true ;;
+        *)       strip "$D/$BIN" 2>/dev/null || true ;;
+    esac
+    after=$(wc -c < "$D/$BIN")
+    echo "  stripped $BIN: $before -> $after bytes"
+fi
+
+# What the binary is actually under, said in the archive rather than only in a
 # release note nobody keeps. A static ffmpeg with libx264 in it makes the whole
 # thing GPL; a build without one does not, and the two cases must not be
 # described by the same file.

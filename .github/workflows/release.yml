@@ -137,16 +137,19 @@ jobs:
           if-no-files-found: error
 
   # ------------------------------------------------------------------
-  # macOS, one job per architecture rather than one universal binary: a
-  # universal build needs a universal ffmpeg, which means building it twice
-  # and lipo-ing six static libraries together. Two archives is less
-  # machinery and says plainly which one to download.
+  # macOS, Apple silicon only.
   #
-  # The Intel runner is macos-15-intel, not macos-13. macos-13 was retired,
-  # and a retired label does not fail - the job simply queues, forever. On
-  # the first release that meant four finished binaries waiting an hour on a
-  # runner that was never going to arrive, which is also why the publish job
-  # no longer insists on all five.
+  # Intel is deliberately not built. It would need either a second runner -
+  # macos-13 is retired, and a retired label does not fail, it queues
+  # forever, which held the first release hostage for an hour - or a
+  # cross-compiled ffmpeg, x264 and raylib to lipo together for a universal
+  # binary. Neither is worth it for a machine Apple stopped selling.
+  #
+  # The output is a .dmg rather than a tarball. A .app is a directory that
+  # Finder draws as one icon, and that only survives a download if whatever
+  # unpacked it kept it intact and the person on the other end knew not to
+  # open it. A disk image mounts as a window with the application on one side
+  # and Applications on the other, so the obvious gesture is the correct one.
   # ------------------------------------------------------------------
   macos:
     name: macos ${{ matrix.arch }}
@@ -156,8 +159,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: arm64,  runner: macos-latest }
-          - { arch: x86_64, runner: macos-15-intel }
+          - { arch: arm64, runner: macos-latest }
     steps:
       - uses: actions/checkout@v7
         with:
@@ -212,8 +214,51 @@ jobs:
       - name: It runs
         run: ./bencsnip --version
 
-      - name: Package
-        run: tools/package.sh "macos-${{ matrix.arch }}" "${{ github.event.inputs.tag || github.ref_name }}"
+      # dmgbuild writes the window layout into the image's .DS_Store directly.
+      # The usual way to style a disk image is to mount it and drive Finder
+      # over AppleScript, which needs an interactive session and therefore
+      # cannot work here - it produces an unstyled image and says nothing.
+      - name: dmgbuild
+        run: |
+          # Into a virtualenv rather than `pip3 install dmgbuild`: the runner's
+          # python is externally managed, so a plain install is refused, and
+          # which of pipx or --break-system-packages is available has moved
+          # around between images. A venv works on all of them and needs
+          # nothing installed first. tools/macos-dmg.sh takes $DMGBUILD.
+          python3 -m venv /tmp/dmgvenv
+          /tmp/dmgvenv/bin/pip install -q dmgbuild
+          echo "DMGBUILD=/tmp/dmgvenv/bin/dmgbuild" >> "$GITHUB_ENV"
+
+      - name: Bundle and image
+        run: |
+          V="${{ github.event.inputs.tag || github.ref_name }}"
+          # CFBundleShortVersionString is meant to be numeric; a leading v
+          # makes Finder's Get Info panel show nothing at all rather than
+          # complain.
+          export SN_VERSION="${V#v}"
+          strip -x bencsnip
+          tools/macos-app.sh bencsnip BENCsnip.app
+          mkdir -p dist
+          tools/macos-dmg.sh BENCsnip.app "dist/bencsnip-$V-macos-${{ matrix.arch }}.dmg"
+          ls -l dist/
+
+      # The image has to mount, and the bundle inside it has to be one
+      # Gatekeeper considers intact. An ad-hoc signature identifies nobody,
+      # but an invalid one gets the bundle reported as "damaged" with no way
+      # to open it anyway - which is indistinguishable, to whoever downloaded
+      # it, from a corrupt file.
+      - name: The image mounts and the app inside it is valid
+        run: |
+          V="${{ github.event.inputs.tag || github.ref_name }}"
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/dmg \
+            "dist/bencsnip-$V-macos-${{ matrix.arch }}.dmg"
+          ls -l /tmp/dmg
+          test -x "/tmp/dmg/BENCsnip.app/Contents/MacOS/BENCsnip"
+          test -f "/tmp/dmg/BENCsnip.app/Contents/Resources/BENCsnip.icns"
+          test -f "/tmp/dmg/BENCsnip.app/Contents/Resources/BINARY-LICENCE.txt"
+          codesign --verify --deep --strict --verbose=2 "/tmp/dmg/BENCsnip.app"
+          "/tmp/dmg/BENCsnip.app/Contents/MacOS/BENCsnip" --version
+          hdiutil detach /tmp/dmg
 
       - uses: actions/upload-artifact@v7
         with:
@@ -344,16 +389,60 @@ jobs:
       - name: The tag matches the source
         run: tools/check-version.sh "$VERSION"
 
+      # The installer is compiled here rather than on the Windows runner. NSIS
+      # is a cross-compiler - makensis on Linux writes a perfectly ordinary
+      # Windows .exe - and building it in the job that already has every
+      # platform's output in hand means one place assembles what gets
+      # published.
+      - name: NSIS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nsis
+
+      - name: Assemble the Windows installer
+        run: |
+          V="$VERSION"
+          rm -rf stage && mkdir -p stage dist
+
+          # The publish job runs even when a platform did not, so the thing
+          # this is built from may not be there. Skipping is right; failing
+          # here would take the other platforms' release down with it.
+          if ! ls dl/pkg-windows-x86_64/*.zip >/dev/null 2>&1; then
+            echo "::warning::no Windows build in this run - no installer"
+            exit 0
+          fi
+
+          unzip -qo dl/pkg-windows-x86_64/*.zip -d /tmp/portable
+          cp /tmp/portable/*/* stage/
+          ls -l stage
+
+          # Four numbers, and the compiler refuses anything else. The display
+          # version keeps its v; this is what Windows shows in the file's
+          # properties, which is where somebody with two setup .exe files in
+          # Downloads finds out which is newer.
+          NUM="${V#v}"
+          case "$NUM" in *.*.*) ;; *) NUM="0.0.0" ;; esac
+          makensis -V2 \
+            -DVERSION="$V" \
+            -DVIVERSION="$NUM.0" \
+            -DSRCDIR="$PWD/stage" \
+            -DICONFILE="$PWD/assets/icon/bencsnip.ico" \
+            -DARTDIR="$PWD/assets/brand" \
+            -DOUTFILE="$PWD/dist/bencsnip-$V-windows-setup.exe" \
+            tools/windows-installer.nsi
+          ls -l dist/
+
       - name: Gather
         run: |
           mkdir -p dist
-          find dl -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} dist/ \;
+          find dl -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.dmg' \) \
+               -exec cp {} dist/ \;
 
           # Say plainly which targets are in this release and which are not,
           # rather than leaving someone to notice the gap on the download
           # page.
           missing=
-          for want in linux-x86_64 linux-arm64 macos-arm64 macos-x86_64 windows-x86_64; do
+          for want in linux-x86_64 linux-arm64 macos-arm64 windows-x86_64 windows-setup; do
             ls dist/ | grep -q -- "$want" || missing="$missing $want"
           done
           if [ -n "$missing" ]; then
@@ -383,14 +472,23 @@ jobs:
 
             | file | for |
             |---|---|
+            | `*-windows-setup.exe` | Windows 10 and later — installer |
+            | `*-windows-x86_64.zip` | Windows, portable: unzip and run |
+            | `*-macos-arm64.dmg` | macOS, Apple silicon — drag to Applications |
             | `*-linux-x86_64.tar.gz` | Linux, Intel/AMD |
             | `*-linux-arm64.tar.gz` | Linux, ARM (Raspberry Pi 5, Ampere) |
-            | `*-macos-arm64.tar.gz` | macOS, Apple silicon |
-            | `*-macos-x86_64.tar.gz` | macOS, Intel |
-            | `*-windows-x86_64.zip` | Windows 10 and later |
 
-            macOS builds are unsigned, so the first launch needs
-            `xattr -dr com.apple.quarantine bencsnip`, or right-click → Open.
+            The installer replaces an existing BENCsnip rather than sitting
+            beside it, and offers to open `.bencsnip` projects on
+            double-click. It leaves video and audio files alone.
+
+            The macOS app is signed ad-hoc, which is not a signature anyone
+            can trust — it just makes the bundle valid rather than "damaged".
+            The first launch still needs right-click → Open, or
+            `xattr -dr com.apple.quarantine /Applications/BENCsnip.app`.
+
+            No Intel macOS build: Apple stopped selling those, and the runner
+            for them is retired.
 
             **Licence.** BENCsnip itself is MIT. These binaries statically link
             FFmpeg built with libx264, which is GPL, so **the binaries are under

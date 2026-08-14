@@ -13,9 +13,10 @@ everything, and it does not ask you to make an account first.
 
 ![the BENCsnip window](docs/gui.png)
 
-**[Download a build](https://github.com/bropple/BENCsnip/releases/latest)** for
-Linux, macOS or Windows — each one carries its own ffmpeg and needs nothing
-installed — or `make` it, which takes about twenty seconds.
+**[Download a build](https://github.com/bropple/BENCsnip/releases/latest)** —
+an installer for Windows, a disk image for macOS, tarballs for Linux (x86-64
+and ARM). Each one carries its own ffmpeg and needs nothing installed. Or
+`make` it, which takes about twenty seconds.
 
 It is roughly what Clipchamp is for, without the sign-in, the upload, the
 watermark, the subscription tier that unlocks 1080p, or the four seconds of
@@ -206,6 +207,26 @@ make probe       a command-line media probe, for when it is unclear whether a
 make icons       regenerates assets/icon from the star the program draws
 make clean
 ```
+
+### Packaging
+
+What the release workflow runs, and what to run by hand to see what a release
+would contain:
+
+```
+tools/package.sh linux-x86_64 v0.1.1     an archive, stripped, with the
+                                         licences and the ffmpeg configure line
+tools/macos-app.sh bencsnip BENCsnip.app a bundle, ad-hoc signed   (macOS)
+tools/macos-dmg.sh BENCsnip.app out.dmg  a drag-to-Applications image (macOS)
+makensis -DSRCDIR=stage -DVERSION=v0.1.1 tools/windows-installer.nsi
+```
+
+The two art generators - `tools/make-dmg-background.sh` and
+`tools/make-installer-art.sh` - write into `assets/brand`, and their output is
+committed rather than built at release time. Art that regenerates on every
+release is art that can silently change, and a release job should not need
+ImageMagick to produce a picture nobody is going to look at until it is
+wrong.
 
 ---
 
