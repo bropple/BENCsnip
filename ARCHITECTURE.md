@@ -1,0 +1,205 @@
+# BENCsnip architecture
+
+## The split that matters
+
+```
+src/core/     sn_media.*      libav: probe, decode, seek, scale, resample
+              sn_timeline.*   tracks, clips, and every edit anything can make
+              sn_render.*     the timeline as pictures and sound
+              sn_project.*    the .bencsnip file
+              sn_export.*     the fast path and the rendering path
+              sn_version.h    one place for the version number
+
+src/gui/      sn_gui.*        theme and widget set
+              sn_player.*     the decode thread and the audio clock
+              sn_bin.*        the media pane and its thumbnail worker
+              sn_track.*      the timeline pane
+              sn_dialog.*     export, information, confirm, file browser
+              sn_filedlg.*    the platform's own open/save dialogs
+              sn_tarr.*       the mascot
+              main.cpp        layout, keyboard, and the glue
+```
+
+`src/core` does not include raylib, does not open a window and does not know
+what a mouse is. `make test` builds and runs it on a machine with no screen and
+no sound card, which is what keeps that rule honest. Everything a headless
+render would need is already there.
+
+## Time
+
+Seconds, in a double, everywhere above the media layer. At an hour a double
+still resolves about a nanosecond, so the only thing needing care is comparing
+two times that ought to be equal after arithmetic — hence one epsilon in
+`sn_timeline.cpp`, used by everything in it.
+
+Frames appear in exactly two places: the export loop, which walks
+`from + n/fps`, and the timecode readout. There is no frame-numbered timeline,
+because a timeline holding a 25 fps clip and a 59.94 fps clip has no single
+frame number to be at.
+
+## The data model
+
+A project is a bin of files and a list of tracks of clips.
+
+```
+Clip = { source, in, out, pos, gain, fadeIn, fadeOut, muted, link }
+```
+
+A clip is a range of one file placed at a time. There is no transition object,
+no nested sequence, no effect graph. Trimming moves `in` or `out`; sliding
+moves `pos`; splitting makes two clips out of one. A cross-fade is two clips on
+two video tracks with fades that overlap, which is what a cross-fade is anyway.
+
+`link` is how a video clip and its audio stay together: clips sharing a nonzero
+link id move, trim and delete as one, and selecting one selects both. A split
+gives the two halves new link ids of their own, because after a cut they are
+separate clips and dragging one should not drag the other.
+
+Each track's clips are kept sorted by `pos` and never overlap. Dropping a clip
+on top of another cuts a hole in the one underneath rather than layering — that
+is what dragging one clip onto another visibly means, and it is what
+`clear_range` in `sn_timeline.cpp` does.
+
+Editing operations are free functions rather than methods, so that the three
+things they all do — change the vector, keep it sorted, mark the project dirty
+— live in one place per operation and cannot be half-done by a new method that
+forgot one.
+
+## Decoding
+
+A `Source` opens the same file twice: one `AVFormatContext` for its video
+stream, another for its audio. One context has one read position, so a seek
+made to find a video frame also moves the audio, and playing a clip whose audio
+runs three seconds ahead of its video in the interleave turns into a seek
+storm. Two contexts cost a file handle and some buffers; in exchange the halves
+are simply independent.
+
+`frameAt(t)` seeks to the keyframe at or before `t` and decodes forward —
+except when `t` is less than two seconds ahead of where the decoder already
+sits, where it just keeps decoding. Two seconds is longer than most GOPs and
+much shorter than a seek plus re-decode, so scrubbing forward through a long
+GOP does not start over from the keyframe on every frame.
+
+`audioAt(t, n, dst)` is the mixer's shape: exactly `n` samples per channel,
+starting at `t`, silence past the end. It keeps a fifo of whatever the last
+decoded frame had left over, because a decoder hands out 1024-sample frames and
+a caller that discards the remainder of each one produces a buzz at the block
+rate rather than the sound of the file.
+
+Everything comes out as RGBA8 at a requested size and interleaved stereo float
+at 48 kHz. Rotation from the container's display matrix is applied on the way
+out, so a portrait phone video is portrait everywhere above this line.
+
+## Rendering
+
+`sn::Renderer` answers one question — what does the timeline look and sound
+like at time `t` — and both the preview and the exporter ask it. That is the
+whole reason the file exists: the usual way an export comes out different from
+the preview is two pieces of code that both know how fades work.
+
+Video composites bottom track to top over opaque black, each layer scaled to
+fit and letterboxed, blended by its fade. Audio sums every unmuted audio clip
+under the block, with fades evaluated per sample — a fade shorter than a block
+would otherwise be a step, and a step in a gain is a click — then clips to
+±1.0, so an overloaded mix sounds overloaded rather than broken.
+
+A Renderer owns its open files and is not thread-safe. The player thread has
+one and the exporter has its own; a decoder is a read position, and two threads
+sharing one is two threads seeking against each other.
+
+## Playback
+
+Three threads.
+
+**The worker** renders ahead: mixed audio into a two-second ring buffer,
+composited pictures into a queue about four deep. It owns its own copy of the
+project, so the GUI can go on editing while a decode is in flight, and it
+decodes with no lock held — holding the mutex across a decode would stall the
+GUI for as long as a seek into a long GOP takes, which is exactly when the GUI
+most needs to keep drawing.
+
+**The audio device** drains the ring on its own thread. An underrun writes
+silence and does *not* advance the read cursor.
+
+**The GUI** asks for the picture that matches the clock.
+
+The clock is the read cursor: `position() = base + (read - readBase) / 48000`.
+Sound that was never played does not move it, which is why an underrun drops a
+frame instead of jumping the playhead forward. On a machine where the audio
+device will not open at all, the worker advances the cursor itself from the
+wall clock and nothing downstream changes.
+
+An edit sends a new project to the worker, which throws away the queued
+pictures but keeps the audio already in the ring. Dragging a clip sends a new
+project on every frame of the drag; emptying the ring each time would mean
+silence for as long as the mouse is moving, where keeping it means at most half
+a second of sound from an arrangement that has since changed.
+
+## Export
+
+Two paths, and which one ran is visible in the UI.
+
+**Stream copy** applies when the timeline is one clip of one file with nothing
+done to it but a trim, and the output settings match the source. Packets are
+copied across with their timestamps shifted; a four-gigabyte camera file is
+trimmed in about a second and loses nothing. The cost is that a copy can only
+begin at a keyframe, so the result may include up to a GOP before the in point.
+The dialog says so before the user commits, and any setting that would change
+the picture — size, frame rate, format — disqualifies it.
+
+**Rendering** is everything else: an output frame at `from + n/fps`, composited
+and encoded, interleaved against 1024-sample audio blocks by whichever stream
+is furthest behind. A stream that has reached the end is treated as infinitely
+far ahead, which is what stops a video that ends before its audio from writing
+frames past the end of the export.
+
+Audio goes through an `AVAudioFifo` because the mixer works in blocks of 1024
+and an encoder wants its own frame size, and those are the same number only by
+luck. Frame timestamps count samples handed to the encoder rather than blocks
+taken from the mixer, so an encoder running at something other than 48 kHz does
+not drift.
+
+If a stream copy fails at the muxer — a container that will not hold those
+codecs as they are — it falls back to rendering rather than reporting an error
+the user would have to understand to act on.
+
+## The interface
+
+Immediate mode, drawn with raylib, no toolkit. The BENCO look is flat fills,
+thin dim borders and small radii, which is what an immediate-mode renderer
+produces by default and what a native widget set would have to be argued out of
+at every step. A clip on a timeline is not in any toolkit anyway.
+
+Two rules the timeline pane is built on:
+
+**Nothing moves until the pointer does.** A drag is armed on mouse-down and
+only acts once the pointer has travelled a few pixels, so a click that selects
+a clip does not also nudge it half a frame.
+
+**The playhead is where the sound is.** Scrubbing seeks the player rather than
+moving a number the player later catches up with.
+
+Icons are drawn from primitives rather than loaded, and every triangle goes
+through one helper that fixes its winding: raylib culls one direction, and
+getting it wrong draws nothing at all, silently.
+
+Thumbnails are made on a worker thread. Decoding one means opening a file and
+seeking — tens of milliseconds for an mp4 and much longer for a camera file on
+a network share — and doing that on the frame a file is dropped means the
+window stops responding at exactly the moment someone is dropping ten more.
+
+## Assets
+
+The font, the wordmark, the licences and the icon are compiled into the binary
+by `tools/mkembed.c`. A file beside an executable is a file that can go
+missing, and when the font went missing in the program this borrowed the idea
+from, the window came up in a fallback face without saying so.
+
+The licences are in there because embedding the font without them would not be
+allowed: the OFL permits bundling provided every copy carries the notice in a
+form the user can easily view. The information window is that form.
+
+S. Tarr is drawn from the roster geometry, and `sn_star_image()` rasterises the
+same geometry for the window icon and for `make icons`. There is no icon
+artwork to keep in step, and no way for the icon in the taskbar to disagree
+with the one in the `.ico`.

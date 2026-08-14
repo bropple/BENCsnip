@@ -1,0 +1,99 @@
+BENCsnip
+Copyright (c) 2026 Ben Ropple
+Licensed under the MIT License. See LICENSE.
+
+This file lists third-party material included in this repository or linked into
+the binaries it produces, and the attribution that must travel with it. If you
+redistribute BENCsnip — source or binary — ship this file, or reproduce the
+notices below.
+
+================================================================================
+1. FFmpeg  (libavformat, libavcodec, libswscale, libswresample, libavutil)
+================================================================================
+
+BENCsnip reads and writes media through the FFmpeg libraries. It does not
+include their source; a build links whatever prefix it was pointed at, either
+the system packages or a static one in vendor/ffmpeg.
+
+FFmpeg is licensed under the GNU Lesser General Public License version 2.1 or
+later (LGPL v2.1+). Some optional components — notably libx264 and libx265 —
+are GPL, and configuring FFmpeg with --enable-gpl makes the resulting libraries
+GPL v2+ as a whole.
+
+    FFmpeg <https://ffmpeg.org/>
+    Copyright (c) 2000-2026 the FFmpeg developers
+    Licensed under the LGPL v2.1 or later; see
+    <https://ffmpeg.org/legal.html> and the COPYING files in the FFmpeg source.
+
+**What this means for a binary you hand to someone.** The LGPL requires that
+the recipient be able to replace the FFmpeg part with their own build. Two ways
+to satisfy that, and BENCsnip is arranged so either works:
+
+  * **Link the system FFmpeg** (the default when no vendor/ffmpeg exists). The
+    libraries stay shared objects the user already owns and can replace. Nothing
+    further is required beyond this notice.
+
+  * **Ship a static build.** Then the relink requirement applies to you: publish
+    the FFmpeg source and configure line you used, alongside the BENCsnip object
+    files or a build that reproduces the link. `tools/build-ffmpeg.sh` records
+    the exact configure line it used in vendor/ffmpeg/CONFIGURE, for this
+    reason. If that build enabled GPL components, the whole distributed binary
+    must be offered under the GPL — BENCsnip's own MIT terms permit this, but
+    your obligations then follow the GPL, not the MIT license above.
+
+The default `tools/build-ffmpeg.sh` configuration is LGPL-only, which is the
+choice that keeps this simple. Pass `--gpl` to it and the note above applies.
+
+================================================================================
+2. raylib
+================================================================================
+
+The window, the input and the drawing. Statically linked into the editor.
+
+    raylib <https://www.raylib.com/>
+    Copyright (c) 2013-2026 Ramon Santamaria (@raysan5)
+    Licensed under the zlib/libpng license.
+
+    This software is provided "as-is", without any express or implied warranty.
+    In no event will the authors be held liable for any damages arising from the
+    use of this software.
+
+    Permission is granted to anyone to use this software for any purpose,
+    including commercial applications, and to alter it and redistribute it
+    freely, subject to the following restrictions:
+
+      1. The origin of this software must not be misrepresented; you must not
+         claim that you wrote the original software. If you use this software in
+         a product, an acknowledgment in the product documentation would be
+         appreciated but is not required.
+
+      2. Altered source versions must be plainly marked as such, and must not be
+         misrepresented as being the original software.
+
+      3. This notice may not be removed or altered from any source distribution.
+
+raylib bundles GLFW (zlib/libpng), miniaudio (public domain / MIT-0), stb_image,
+stb_truetype and stb_vorbis (public domain / MIT). Their notices travel with the
+raylib source.
+
+================================================================================
+3. Terminus (TTF)  (assets/fonts/TerminusTTF.ttf)
+================================================================================
+
+The interface font, embedded in the editor binary and therefore redistributed
+with it. Bundled unmodified — the SIL Open Font License reserves the names
+"Terminus Font" and "Terminus (TTF)" against modified versions, and shipping the
+released file exactly as released keeps that question from arising.
+
+    Terminus (TTF) 4.49.3
+    Copyright (c) 2010-2020 Dimitar Zhekov (Terminus Font)
+    TrueType conversion copyright (c) Tilman Blumenbach
+    <https://files.ax86.net/terminus-ttf/>
+    Licensed under the SIL Open Font License, Version 1.1.
+
+The OFL permits bundling the font with software "provided that each copy
+contains the above copyright notice and this license... either as stand-alone
+text files, human-readable headers or in the appropriate machine-readable
+metadata fields". The full licence is in assets/fonts/OFL.txt, is compiled into
+the binary alongside the font, and is shown by the editor's info window — that
+window is how a binary-only copy satisfies the condition.

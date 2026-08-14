@@ -1,0 +1,636 @@
+/*
+ * BENCsnip - writing it out
+ */
+
+#include "sn_export.h"
+#include "sn_render.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/audio_fifo.h>
+#include <libavutil/imgutils.h>
+#include <libavutil/opt.h>
+#include <libswresample/swresample.h>
+#include <libswscale/swscale.h>
+}
+
+namespace sn {
+
+static std::string averr2(int e)
+{
+    char b[AV_ERROR_MAX_STRING_SIZE] = {0};
+    av_strerror(e, b, sizeof b);
+    return b;
+}
+
+std::string containerFor(const std::string &path)
+{
+    const AVOutputFormat *of = av_guess_format(nullptr, path.c_str(), nullptr);
+    if (!of || !of->name) return "";
+    return of->name;
+}
+
+std::vector<std::string> videoEncoders()
+{
+    /* Ordered by what someone actually wants out of an editor, not by what is
+     * technically superior: H.264 opens everywhere, and that is the whole
+     * argument. The rest are there for the cases where it is not enough. */
+    static const char *want[] = {"libx264", "libx265", "libsvtav1", "librav1e",
+                                 "libvpx-vp9", "libvpx", "mpeg4", "ffv1",
+                                 "libaom-av1", nullptr};
+    std::vector<std::string> out;
+    for (int i = 0; want[i]; i++)
+        if (avcodec_find_encoder_by_name(want[i])) out.push_back(want[i]);
+    return out;
+}
+
+std::vector<std::string> audioEncoders()
+{
+    static const char *want[] = {"aac", "libopus", "libmp3lame", "flac",
+                                 "pcm_s16le", "libvorbis", nullptr};
+    std::vector<std::string> out;
+    for (int i = 0; want[i]; i++)
+        if (avcodec_find_encoder_by_name(want[i])) out.push_back(want[i]);
+    return out;
+}
+
+/* The formats an encoder accepts. ffmpeg 7.1 replaced the arrays on AVCodec
+ * with a query function and deprecated the fields; both spellings are here so
+ * this builds against whatever the distribution ships.
+ *
+ * A macro rather than a function with a fallback argument, because naming the
+ * deprecated field at all - even in an argument the new branch never uses -
+ * is a warning per call site. */
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100)
+template <typename T>
+static const T *query_config(AVCodecContext *ctx, const AVCodec *codec, AVCodecConfig cfg)
+{
+    const void *list = nullptr;
+    int n = 0;
+    if (avcodec_get_supported_config(ctx, codec, cfg, 0, &list, &n) >= 0 && list)
+        return (const T *)list;
+    return nullptr;
+}
+#define SN_SUPPORTED(T, ctx, codec, cfg, legacy) query_config<T>(ctx, codec, cfg)
+#else
+#define SN_SUPPORTED(T, ctx, codec, cfg, legacy) ((const T *)(codec)->legacy)
+#endif
+
+/* ------------------------------------------------------------------ *
+ * The fast path
+ * ------------------------------------------------------------------ */
+
+/* Every clip on the timeline, flattened, for the checks below. */
+static std::vector<const Clip *> all_clips(const Project &p)
+{
+    std::vector<const Clip *> v;
+    for (const Track &t : p.tracks)
+        for (const Clip &c : t.clips) v.push_back(&c);
+    return v;
+}
+
+bool canStreamCopy(const Project &p, const ExportSettings &s, std::string *why)
+{
+    auto no = [&](const char *r) { if (why) *why = r; return false; };
+
+    if (!s.allowCopy) return no("re-encoding was asked for");
+
+    std::vector<const Clip *> cl = all_clips(p);
+    if (cl.empty()) return no("there is nothing on the timeline");
+
+    const int src = cl[0]->source;
+    for (const Clip *c : cl) {
+        if (c->source != src) return no("the timeline uses more than one file");
+        if (std::fabs(c->in - cl[0]->in) > 1e-6 || std::fabs(c->out - cl[0]->out) > 1e-6 ||
+            std::fabs(c->pos - cl[0]->pos) > 1e-6)
+            return no("the clips have been cut apart");
+        if (c->fadeIn > 0 || c->fadeOut > 0) return no("there is a fade on it");
+        if (std::fabs(c->gain - 1.0) > 1e-6) return no("the volume was changed");
+        if (c->muted) return no("something is muted");
+    }
+    if (cl.size() > 2) return no("more than one clip is on the timeline");
+
+    const BinItem *b = p.item(src);
+    if (!b || b->missing) return no("the file is missing");
+
+    /* Everything the settings would change means re-encoding. */
+    if (b->info.hasVideo) {
+        if (s.width != b->info.dispW() || s.height != b->info.dispH())
+            return no("the output size differs from the source");
+        if (s.fps > 0 && b->info.fps > 0 && std::fabs(s.fps - b->info.fps) > 0.01)
+            return no("the frame rate differs from the source");
+    }
+
+    /* The range asked for has to be inside the one clip. */
+    double to = s.to < 0 ? p.duration() : s.to;
+    if (s.from < cl[0]->pos - 1e-6 || to > cl[0]->end() + 1e-6)
+        return no("the export range runs past the clip");
+
+    /* And the container has to accept the codecs as they are. */
+    const AVOutputFormat *of = av_guess_format(nullptr, s.path.c_str(), nullptr);
+    if (!of) return no("the output format is unclear");
+
+    if (why) *why = "";
+    return true;
+}
+
+static bool stream_copy(const Project &p, const ExportSettings &s, ExportStatus *st)
+{
+    std::vector<const Clip *> cl = all_clips(p);
+    const Clip *c = cl[0];
+    const BinItem *b = p.item(c->source);
+
+    const double to = s.to < 0 ? p.duration() : s.to;
+    const double srcFrom = c->srcAt(std::max(s.from, c->pos));
+    const double srcTo = c->srcAt(std::min(to, c->end()));
+
+    AVFormatContext *in = nullptr, *out = nullptr;
+    int rc = avformat_open_input(&in, b->info.path.c_str(), nullptr, nullptr);
+    if (rc < 0) { st->say("cannot open " + b->info.name); return false; }
+    avformat_find_stream_info(in, nullptr);
+
+    rc = avformat_alloc_output_context2(&out, nullptr, nullptr, s.path.c_str());
+    if (rc < 0 || !out) { avformat_close_input(&in); st->say("cannot write that format"); return false; }
+
+    std::vector<int> map(in->nb_streams, -1);
+    for (unsigned i = 0; i < in->nb_streams; i++) {
+        AVStream *is = in->streams[i];
+        if (is->codecpar->codec_type != AVMEDIA_TYPE_VIDEO &&
+            is->codecpar->codec_type != AVMEDIA_TYPE_AUDIO)
+            continue;
+        if (is->disposition & AV_DISPOSITION_ATTACHED_PIC) continue;
+
+        AVStream *os = avformat_new_stream(out, nullptr);
+        if (!os) continue;
+        avcodec_parameters_copy(os->codecpar, is->codecpar);
+        os->codecpar->codec_tag = 0;
+        os->time_base = is->time_base;
+        map[i] = os->index;
+    }
+
+    if (!(out->oformat->flags & AVFMT_NOFILE)) {
+        rc = avio_open(&out->pb, s.path.c_str(), AVIO_FLAG_WRITE);
+        if (rc < 0) {
+            st->say("cannot write " + s.path + ": " + averr2(rc));
+            avformat_close_input(&in);
+            avformat_free_context(out);
+            return false;
+        }
+    }
+    rc = avformat_write_header(out, nullptr);
+    if (rc < 0) {
+        st->say("this container will not hold those codecs as they are: " + averr2(rc));
+        if (out->pb) avio_closep(&out->pb);
+        avformat_close_input(&in);
+        avformat_free_context(out);
+        return false;
+    }
+
+    /* Seek to the keyframe at or before the in point. Everything between it
+     * and the in point comes along - that is the deal a copy makes, and the
+     * dialog says so. */
+    int64_t seekTs = (int64_t)llround(srcFrom * AV_TIME_BASE);
+    av_seek_frame(in, -1, seekTs, AVSEEK_FLAG_BACKWARD);
+
+    /* Timestamps have to start near zero in the new file, and every stream
+     * has to shift by the same amount or the sync goes. */
+    std::vector<int64_t> off(in->nb_streams, AV_NOPTS_VALUE);
+
+    AVPacket *pkt = av_packet_alloc();
+    double lastT = srcFrom;
+
+    while (av_read_frame(in, pkt) >= 0) {
+        if (st->cancel.load()) { av_packet_unref(pkt); break; }
+
+        int oi = pkt->stream_index < (int)map.size() ? map[pkt->stream_index] : -1;
+        if (oi < 0) { av_packet_unref(pkt); continue; }
+
+        AVStream *is = in->streams[pkt->stream_index];
+        AVStream *os = out->streams[oi];
+
+        double t = (pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts) * av_q2d(is->time_base);
+        if (t > srcTo) { av_packet_unref(pkt); break; }
+
+        if (off[pkt->stream_index] == AV_NOPTS_VALUE)
+            off[pkt->stream_index] = (int64_t)llround(srcFrom / av_q2d(is->time_base));
+
+        if (pkt->pts != AV_NOPTS_VALUE) pkt->pts -= off[pkt->stream_index];
+        if (pkt->dts != AV_NOPTS_VALUE) pkt->dts -= off[pkt->stream_index];
+
+        /* A packet from before the in point has a negative timestamp now.
+         * mp4 tolerates that (it becomes an edit list); others do not, so
+         * shift such packets to zero rather than dropping them, which would
+         * break the decoder's reference chain. */
+        if (pkt->pts != AV_NOPTS_VALUE && pkt->pts < 0) pkt->pts = 0;
+        if (pkt->dts != AV_NOPTS_VALUE && pkt->dts < 0) pkt->dts = 0;
+
+        av_packet_rescale_ts(pkt, is->time_base, os->time_base);
+        pkt->stream_index = oi;
+        pkt->pos = -1;
+
+        if (av_interleaved_write_frame(out, pkt) < 0) { av_packet_unref(pkt); break; }
+        av_packet_unref(pkt);
+
+        lastT = t;
+        double span = srcTo - srcFrom;
+        st->progress.store(span > 0 ? std::min(1.0, (lastT - srcFrom) / span) : 1.0);
+    }
+
+    av_write_trailer(out);
+    av_packet_free(&pkt);
+    if (out->pb) avio_closep(&out->pb);
+    avformat_free_context(out);
+    avformat_close_input(&in);
+
+    st->progress.store(1.0);
+    st->copied.store(true);
+    return !st->cancel.load();
+}
+
+/* ------------------------------------------------------------------ *
+ * The rendering path
+ * ------------------------------------------------------------------ */
+
+namespace {
+
+struct VEnc {
+    AVStream *st = nullptr;
+    AVCodecContext *ctx = nullptr;
+    AVFrame *frm = nullptr;
+    SwsContext *sws = nullptr;
+    int64_t n = 0;
+};
+
+struct AEnc {
+    AVStream *st = nullptr;
+    AVCodecContext *ctx = nullptr;
+    AVFrame *frm = nullptr;
+    SwrContext *swr = nullptr;
+    AVAudioFifo *fifo = nullptr;
+    int64_t n = 0;              /* input samples taken from the mixer, at RATE */
+    int64_t out = 0;            /* samples handed to the encoder, at its rate  */
+};
+
+} /* namespace */
+
+static bool write_packets(AVFormatContext *out, AVCodecContext *enc, AVStream *st,
+                          AVPacket *pkt, ExportStatus *stt)
+{
+    for (;;) {
+        int rc = avcodec_receive_packet(enc, pkt);
+        if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) return true;
+        if (rc < 0) { stt->say("encoder failed: " + averr2(rc)); return false; }
+
+        av_packet_rescale_ts(pkt, enc->time_base, st->time_base);
+        pkt->stream_index = st->index;
+        rc = av_interleaved_write_frame(out, pkt);
+        av_packet_unref(pkt);
+        if (rc < 0) { stt->say("cannot write: " + averr2(rc)); return false; }
+    }
+}
+
+static bool render(const Project &p, const ExportSettings &s, ExportStatus *st)
+{
+    const double to = s.to < 0 ? p.duration() : s.to;
+    const double span = to - s.from;
+    if (span <= 0) { st->say("the export range is empty"); return false; }
+
+    Renderer ren(&p);
+
+    AVFormatContext *out = nullptr;
+    int rc = avformat_alloc_output_context2(&out, nullptr, nullptr, s.path.c_str());
+    if (rc < 0 || !out) { st->say("cannot write that format"); return false; }
+
+    VEnc v;
+    AEnc a;
+    bool ok = true;
+
+    /* Whether the timeline has anything of each kind, so an audio-only
+     * timeline does not get a video track of black. */
+    bool anyVideo = false, anyAudio = false;
+    for (const Track &t : p.tracks)
+        for (const Clip &c : t.clips) {
+            const BinItem *b = p.item(c.source);
+            if (!b) continue;
+            if (t.kind == TRACK_VIDEO && b->info.hasVideo) anyVideo = true;
+            if (t.kind == TRACK_AUDIO && b->info.hasAudio) anyAudio = true;
+        }
+
+    const bool wantV = !s.vcodec.empty() && s.vcodec != "none" && anyVideo;
+    const bool wantA = !s.acodec.empty() && s.acodec != "none" && anyAudio;
+
+    if (!wantV && !wantA) {
+        st->say("there is nothing to write");
+        avformat_free_context(out);
+        return false;
+    }
+
+    /* --- video encoder --- */
+    if (wantV) {
+        const AVCodec *codec = avcodec_find_encoder_by_name(s.vcodec.c_str());
+        if (!codec) { st->say("this build has no " + s.vcodec + " encoder"); ok = false; }
+
+        if (ok) {
+            v.st = avformat_new_stream(out, nullptr);
+            v.ctx = avcodec_alloc_context3(codec);
+
+            /* Encoders want even dimensions; a 1279-wide export is a failure
+             * to open the encoder, ten seconds after the user chose a file. */
+            v.ctx->width = std::max(2, s.width & ~1);
+            v.ctx->height = std::max(2, s.height & ~1);
+
+            AVRational fr = av_d2q(s.fps > 0 ? s.fps : 30.0, 1000000);
+            v.ctx->time_base = av_inv_q(fr);
+            v.ctx->framerate = fr;
+            v.ctx->gop_size = (int)std::lround(std::max(1.0, s.fps)) * 2;
+            v.ctx->max_b_frames = 2;
+            v.ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+
+            const AVPixelFormat *pf = SN_SUPPORTED(AVPixelFormat, v.ctx, codec,
+                                                   AV_CODEC_CONFIG_PIX_FORMAT, pix_fmts);
+            if (pf) {
+                bool has420 = false;
+                for (int i = 0; pf[i] != AV_PIX_FMT_NONE; i++)
+                    if (pf[i] == AV_PIX_FMT_YUV420P) has420 = true;
+                if (!has420) v.ctx->pix_fmt = pf[0];
+            }
+
+            if (s.vbitrate > 0) v.ctx->bit_rate = s.vbitrate;
+            if (out->oformat->flags & AVFMT_GLOBALHEADER)
+                v.ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+
+            /* Not every encoder has these; the ones that do are the ones
+             * anybody picks, and setting them on one that does not is a
+             * no-op rather than an error. */
+            if (s.vbitrate <= 0)
+                av_opt_set_int(v.ctx->priv_data, "crf", s.crf, 0);
+            av_opt_set(v.ctx->priv_data, "preset", s.preset.c_str(), 0);
+            av_opt_set_int(v.ctx->priv_data, "cq", s.crf, 0);          /* nvenc  */
+            av_opt_set_int(v.ctx->priv_data, "row-mt", 1, 0);          /* vpx    */
+
+            rc = avcodec_open2(v.ctx, codec, nullptr);
+            if (rc < 0) { st->say("cannot start " + s.vcodec + ": " + averr2(rc)); ok = false; }
+        }
+
+        if (ok) {
+            avcodec_parameters_from_context(v.st->codecpar, v.ctx);
+            v.st->time_base = v.ctx->time_base;
+
+            v.frm = av_frame_alloc();
+            v.frm->format = v.ctx->pix_fmt;
+            v.frm->width = v.ctx->width;
+            v.frm->height = v.ctx->height;
+            if (av_frame_get_buffer(v.frm, 0) < 0) { st->say("out of memory"); ok = false; }
+
+            v.sws = sws_getContext(v.ctx->width, v.ctx->height, AV_PIX_FMT_RGBA,
+                                   v.ctx->width, v.ctx->height, v.ctx->pix_fmt,
+                                   SWS_BILINEAR, nullptr, nullptr, nullptr);
+            if (!v.sws) { st->say("cannot convert to the encoder's pixel format"); ok = false; }
+        }
+    }
+
+    /* --- audio encoder --- */
+    if (ok && wantA) {
+        const AVCodec *codec = avcodec_find_encoder_by_name(s.acodec.c_str());
+        if (!codec) { st->say("this build has no " + s.acodec + " encoder"); ok = false; }
+
+        if (ok) {
+            a.st = avformat_new_stream(out, nullptr);
+            a.ctx = avcodec_alloc_context3(codec);
+
+            a.ctx->sample_fmt = AV_SAMPLE_FMT_FLTP;
+            const AVSampleFormat *sf = SN_SUPPORTED(AVSampleFormat, a.ctx, codec,
+                                                    AV_CODEC_CONFIG_SAMPLE_FORMAT, sample_fmts);
+            if (sf) {
+                bool ok2 = false;
+                for (int i = 0; sf[i] != AV_SAMPLE_FMT_NONE; i++)
+                    if (sf[i] == a.ctx->sample_fmt) ok2 = true;
+                if (!ok2) a.ctx->sample_fmt = sf[0];
+            }
+
+            a.ctx->sample_rate = RATE;
+            const int *sr = SN_SUPPORTED(int, a.ctx, codec, AV_CODEC_CONFIG_SAMPLE_RATE,
+                                         supported_samplerates);
+            if (sr) {
+                bool ok2 = false;
+                int best = 0;
+                for (int i = 0; sr[i]; i++) {
+                    if (sr[i] == RATE) ok2 = true;
+                    if (sr[i] > best) best = sr[i];
+                }
+                if (!ok2) a.ctx->sample_rate = best ? best : RATE;
+            }
+
+            av_channel_layout_default(&a.ctx->ch_layout, CHANS);
+            a.ctx->bit_rate = s.abitrate;
+            a.ctx->time_base = AVRational{1, a.ctx->sample_rate};
+            if (out->oformat->flags & AVFMT_GLOBALHEADER)
+                a.ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+
+            rc = avcodec_open2(a.ctx, codec, nullptr);
+            if (rc < 0) { st->say("cannot start " + s.acodec + ": " + averr2(rc)); ok = false; }
+        }
+
+        if (ok) {
+            avcodec_parameters_from_context(a.st->codecpar, a.ctx);
+            a.st->time_base = a.ctx->time_base;
+
+            /* A codec with no fixed frame size (pcm, flac) takes whatever it
+             * is given; one with a fixed size gets exactly that many. */
+            int fs = a.ctx->frame_size > 0 ? a.ctx->frame_size : 1024;
+            a.frm = av_frame_alloc();
+            a.frm->format = a.ctx->sample_fmt;
+            a.frm->sample_rate = a.ctx->sample_rate;
+            av_channel_layout_copy(&a.frm->ch_layout, &a.ctx->ch_layout);
+            a.frm->nb_samples = fs;
+            if (av_frame_get_buffer(a.frm, 0) < 0) { st->say("out of memory"); ok = false; }
+
+            AVChannelLayout inLayout;
+            av_channel_layout_default(&inLayout, CHANS);
+            rc = swr_alloc_set_opts2(&a.swr, &a.ctx->ch_layout, a.ctx->sample_fmt,
+                                     a.ctx->sample_rate, &inLayout, AV_SAMPLE_FMT_FLT,
+                                     RATE, 0, nullptr);
+            if (rc < 0 || swr_init(a.swr) < 0) { st->say("cannot resample"); ok = false; }
+
+            a.fifo = av_audio_fifo_alloc(a.ctx->sample_fmt, CHANS, fs * 4);
+            if (!a.fifo) { st->say("out of memory"); ok = false; }
+        }
+    }
+
+    /* --- open and write the header --- */
+    if (ok && !(out->oformat->flags & AVFMT_NOFILE)) {
+        rc = avio_open(&out->pb, s.path.c_str(), AVIO_FLAG_WRITE);
+        if (rc < 0) { st->say("cannot write " + s.path + ": " + averr2(rc)); ok = false; }
+    }
+    if (ok) {
+        rc = avformat_write_header(out, nullptr);
+        if (rc < 0) { st->say("cannot start the file: " + averr2(rc)); ok = false; }
+    }
+
+    /* --- the loop --- */
+    AVPacket *pkt = ok ? av_packet_alloc() : nullptr;
+    VideoFrame pic;
+    std::vector<float> mix;
+    const int ablock = 1024;
+    mix.resize((size_t)ablock * CHANS);
+
+    bool wroteHeader = ok;
+
+    while (ok && !st->cancel.load()) {
+        /* Whichever stream is furthest behind goes next, and a stream that
+         * has reached the end is infinitely far ahead - that is what keeps a
+         * video that ends before its audio from writing frames past the end
+         * of the export. */
+        double vt = v.ctx ? s.from + v.n * av_q2d(v.ctx->time_base) : 1e18;
+        double at = a.ctx ? s.from + a.n / (double)RATE : 1e18;
+        if (vt >= to) vt = 1e18;
+        if (at >= to) at = 1e18;
+
+        if (vt > 1e17 && at > 1e17) break;
+
+        if (v.ctx && vt <= at) {
+            ren.videoAt(vt, v.ctx->width, v.ctx->height, &pic);
+
+            if (av_frame_make_writable(v.frm) < 0) { ok = false; break; }
+            const uint8_t *src[4] = {pic.rgba.data(), nullptr, nullptr, nullptr};
+            int stride[4] = {v.ctx->width * 4, 0, 0, 0};
+            sws_scale(v.sws, src, stride, 0, v.ctx->height, v.frm->data, v.frm->linesize);
+            v.frm->pts = v.n++;
+
+            rc = avcodec_send_frame(v.ctx, v.frm);
+            if (rc < 0) { st->say("encoder refused a frame: " + averr2(rc)); ok = false; break; }
+            if (!write_packets(out, v.ctx, v.st, pkt, st)) { ok = false; break; }
+        } else if (a.ctx && at < 1e17) {
+            ren.audioAt(at, ablock, mix.data());
+
+            const uint8_t *in[1] = {(const uint8_t *)mix.data()};
+            /* One conversion into a temporary frame, then into the fifo; the
+             * encoder wants its own frame size and the mixer works in blocks
+             * of 1024, and those are only the same number by luck. */
+            AVFrame *tmp = av_frame_alloc();
+            tmp->format = a.ctx->sample_fmt;
+            tmp->sample_rate = a.ctx->sample_rate;
+            av_channel_layout_copy(&tmp->ch_layout, &a.ctx->ch_layout);
+            tmp->nb_samples = (int)av_rescale_rnd(swr_get_delay(a.swr, RATE) + ablock,
+                                                  a.ctx->sample_rate, RATE, AV_ROUND_UP);
+            if (av_frame_get_buffer(tmp, 0) < 0) { av_frame_free(&tmp); ok = false; break; }
+
+            int got = swr_convert(a.swr, tmp->data, tmp->nb_samples, in, ablock);
+            if (got > 0) av_audio_fifo_write(a.fifo, (void **)tmp->data, got);
+            av_frame_free(&tmp);
+
+            a.n += ablock;
+
+            while (av_audio_fifo_size(a.fifo) >= a.frm->nb_samples) {
+                if (av_frame_make_writable(a.frm) < 0) { ok = false; break; }
+                av_audio_fifo_read(a.fifo, (void **)a.frm->data, a.frm->nb_samples);
+
+                /* The encoder's time base is 1/sample_rate, so a frame's pts
+                 * is simply how many samples went in before it. Counting the
+                 * mixer's blocks instead would drift whenever the encoder
+                 * runs at something other than 48 kHz. */
+                a.frm->pts = a.out;
+                a.out += a.frm->nb_samples;
+
+                rc = avcodec_send_frame(a.ctx, a.frm);
+                if (rc < 0) { st->say("encoder refused audio: " + averr2(rc)); ok = false; break; }
+                if (!write_packets(out, a.ctx, a.st, pkt, st)) { ok = false; break; }
+            }
+        } else {
+            break;
+        }
+
+        double done = std::min(vt, at) - s.from;
+        if (done < 1e17) st->progress.store(std::max(0.0, std::min(1.0, done / span)));
+    }
+
+    /* --- flush --- */
+    if (ok && !st->cancel.load()) {
+        if (a.ctx) {
+            /* Whatever is left in the fifo, padded out to a frame. */
+            if (av_audio_fifo_size(a.fifo) > 0) {
+                int left = av_audio_fifo_size(a.fifo);
+                if (av_frame_make_writable(a.frm) == 0) {
+                    /* Silence first, then the remainder over the top: a codec
+                     * with a fixed frame size gets a full frame either way,
+                     * and the tail is silence rather than whatever was in the
+                     * buffer last time round. */
+                    av_samples_set_silence(a.frm->data, 0, a.frm->nb_samples, CHANS,
+                                           a.ctx->sample_fmt);
+                    av_audio_fifo_read(a.fifo, (void **)a.frm->data, left);
+                    a.frm->pts = a.out;
+                    a.out += a.frm->nb_samples;
+                    avcodec_send_frame(a.ctx, a.frm);
+                    write_packets(out, a.ctx, a.st, pkt, st);
+                }
+            }
+            avcodec_send_frame(a.ctx, nullptr);
+            write_packets(out, a.ctx, a.st, pkt, st);
+        }
+        if (v.ctx) {
+            avcodec_send_frame(v.ctx, nullptr);
+            write_packets(out, v.ctx, v.st, pkt, st);
+        }
+    }
+
+    if (wroteHeader) av_write_trailer(out);
+
+    /* --- teardown --- */
+    if (pkt) av_packet_free(&pkt);
+    if (v.sws) sws_freeContext(v.sws);
+    if (v.frm) av_frame_free(&v.frm);
+    if (v.ctx) avcodec_free_context(&v.ctx);
+    if (a.fifo) av_audio_fifo_free(a.fifo);
+    if (a.swr) swr_free(&a.swr);
+    if (a.frm) av_frame_free(&a.frm);
+    if (a.ctx) avcodec_free_context(&a.ctx);
+    if (out->pb) avio_closep(&out->pb);
+    avformat_free_context(out);
+
+    if (ok && !st->cancel.load()) st->progress.store(1.0);
+    return ok && !st->cancel.load();
+}
+
+/* ------------------------------------------------------------------ *
+ * exportTimeline
+ * ------------------------------------------------------------------ */
+
+bool exportTimeline(const Project &p, const ExportSettings &s, ExportStatus *st)
+{
+    st->running.store(true);
+    st->ok.store(false);
+    st->copied.store(false);
+    st->progress.store(0.0);
+
+    bool result;
+    std::string why;
+    if (canStreamCopy(p, s, &why)) {
+        st->say("copying without re-encoding");
+        result = stream_copy(p, s, st);
+        /* A container that turns out not to accept the codecs is not a
+         * failure the user should have to understand - fall back and render
+         * it, which always works. */
+        if (!result && !st->cancel.load()) {
+            st->copied.store(false);
+            st->say("re-encoding");
+            result = render(p, s, st);
+        }
+    } else {
+        st->say("rendering");
+        result = render(p, s, st);
+    }
+
+    if (result) st->say("done");
+    else if (st->cancel.load()) st->say("cancelled");
+
+    st->ok.store(result);
+    st->running.store(false);
+    return result;
+}
+
+} /* namespace sn */

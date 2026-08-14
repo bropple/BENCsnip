@@ -1,0 +1,155 @@
+name: build
+
+# The README claims BENCsnip builds on Linux, macOS and Windows and opens what
+# ffmpeg opens. This is what turns those claims into something verified rather
+# than asserted.
+#
+# Every job that builds something keeps it: an earlier arrangement built three
+# platforms, proved they linked, and then deleted the results, which is most of
+# the reason to build three platforms in the first place.
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The core links no raylib and opens no window - the property that makes a
+  # headless render and these tests possible at all. Checked first and on its
+  # own, because if it ever stops being true the GUI jobs below would still
+  # pass and nothing would say so.
+  core:
+    name: core (no raylib, no window)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ffmpeg development libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libavformat-dev libavcodec-dev \
+                                  libswscale-dev libswresample-dev libavutil-dev
+
+      - name: Build the core
+        run: make core
+
+      - name: The core really does not link raylib
+        run: |
+          if nm -uC libbencsnip.a | grep -iE 'raylib|glfw|InitWindow|BeginDrawing'; then
+            echo "the core has picked up a dependency on the windowing library"
+            exit 1
+          fi
+          echo "clean"
+
+      # These decode, mix, cut and encode real files. A green tick here means
+      # both export paths produced something ffprobe can read back.
+      - name: Test media, then the tests
+        run: |
+          make testmedia
+          make test
+
+  linux:
+    name: linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libavformat-dev libavcodec-dev \
+                                  libswscale-dev libswresample-dev libavutil-dev \
+                                  libgl1-mesa-dev libx11-dev libxrandr-dev \
+                                  libxinerama-dev libxcursor-dev libxi-dev \
+                                  xvfb libasound2-dev
+
+      - name: raylib
+        run: |
+          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib
+          cmake -S raylib -B raylib/build -DBUILD_SHARED_LIBS=OFF \
+                -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/vendor/raylib"
+          cmake --build raylib/build --target install -j
+
+      - name: Build
+        run: make
+
+      # A window that comes up, draws the layout and exits is a much stronger
+      # check than a successful link: it exercises the font, the icon, the
+      # decoder and every pane, and it fails loudly if any of them is missing.
+      - name: It opens a window and draws
+        run: |
+          make testmedia
+          xvfb-run -a -s "-screen 0 1400x900x24" \
+            ./bencsnip media/test1.mp4 --shot ci-shot.png --frames 60
+          test -s ci-shot.png
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsnip-linux
+          path: |
+            bencsnip
+            ci-shot.png
+
+  macos:
+    name: macos
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: brew install ffmpeg raylib
+      - name: Build
+        run: make
+      - name: It runs
+        run: ./bencsnip --version
+
+      # The zip GitHub writes does not carry the executable bit, so anything
+      # downloaded from here needs a chmod +x before it will start. Said here
+      # rather than discovered there.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsnip-macos
+          path: bencsnip
+
+  windows:
+    name: windows
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-ffmpeg
+            mingw-w64-x86_64-raylib
+
+      - name: Build
+        run: make
+
+      # Without -static the executable imports three DLLs that live inside an
+      # MSYS2 installation and nowhere else: it runs here and fails to start on
+      # every machine that downloads it. The import table is the only place the
+      # answer lives, so that is what gets checked.
+      - name: No MSYS2 runtime DLLs in the import table
+        run: |
+          if objdump -p bencsnip.exe | grep -iE 'libstdc\+\+-6|libgcc_s|libwinpthread'; then
+            echo "the executable needs MSYS2 DLLs to start"
+            exit 1
+          fi
+          echo "clean"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bencsnip-windows
+          path: bencsnip.exe

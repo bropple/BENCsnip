@@ -1,0 +1,193 @@
+/*
+ * BENCsnip GUI - theme and widget set
+ *
+ * Drawn here rather than taken from a toolkit, for the same reason BENCsynth
+ * and BENCmouth draw their own: the BENCO look is flat fills, thin dim borders
+ * and small radii, which is what an immediate-mode renderer produces by
+ * default, and a native widget set would have to be argued out of its
+ * scrollbars, focus rings and animations at every step. A clip on a timeline
+ * is not in any toolkit anyway.
+ *
+ * Every colour here comes from the BENCO style guide and nowhere else.
+ */
+
+#ifndef SN_GUI_H
+#define SN_GUI_H
+
+#include "raylib.h"
+
+#include <string>
+
+/* ------------------------------------------------------------------ *
+ * Palette
+ * ------------------------------------------------------------------ */
+
+extern Color SN_BG;        /* window background, a green-tinted near-black */
+extern Color SN_WELL;      /* the recess a panel sits in                   */
+extern Color SN_PANEL;     /* a panel's face                               */
+extern Color SN_PANEL_HI;  /* its header, and a hovered control            */
+extern Color SN_BORDER;    /* 1px, dim, never decorative                   */
+extern Color SN_TEXT;      /* phosphor - the screen-glow green, not white  */
+extern Color SN_DIM;       /* labels, captions, anything secondary         */
+extern Color SN_ACCENT;    /* the brand green: fills, active states        */
+extern Color SN_EDGE;      /* pressed states and outlines                  */
+extern Color SN_ALERT;     /* errors, the record dot, S. Tarr's stripe     */
+extern Color SN_AMBER;     /* warnings, the playhead                       */
+extern Color SN_STAR;      /* S. Tarr                                      */
+extern Color SN_STAR_EDGE;
+extern Color SN_VISOR;
+
+/* Clips are coloured by what is in them, not by which file they came from:
+ * one glance says "picture" or "sound" without reading anything. The two are
+ * roster colours - P. Gon's blue for video, R. Triy's green for audio - kept
+ * dark enough that white-ish text sits on them legibly. */
+extern Color SN_CLIP_V, SN_CLIP_V_HI, SN_CLIP_V_EDGE;
+extern Color SN_CLIP_A, SN_CLIP_A_HI, SN_CLIP_A_EDGE;
+
+#define SN_RADIUS 3
+#define SN_PAD    8
+
+/* Terminus is a bitmap design: crisp at its native sizes, mush between them.
+ * These are native sizes and the font is loaded with point filtering to keep
+ * it that way. */
+enum {
+    SN_F_TINY = 12,   /* clip labels, timecodes on the ruler */
+    SN_F_SMALL = 16,  /* buttons, panel titles               */
+    SN_F_BODY = 20,   /* the status line                     */
+    SN_F_TITLE = 28   /* the wordmark                        */
+};
+
+/* ------------------------------------------------------------------ *
+ * State
+ * ------------------------------------------------------------------ */
+
+typedef struct sn_ui {
+    Font tiny, small, body, title;
+    int loaded;
+
+    /* Which control has the mouse, by caller-chosen id. One at a time, so a
+     * drag that wanders off its own rectangle keeps going - which is what
+     * dragging a clip is, most of the time. Zero is nobody. */
+    int active;
+    float grabX, grabY;   /* pointer where the drag started */
+    float grabV;          /* the control's value then       */
+
+    int hot;              /* what the pointer is over, for the status line */
+
+    /* Double-click detection. */
+    int lastId;
+    double lastClick;
+
+    /* A menu drawn over the layout has to draw after everything it covers and
+     * take the mouse away from what is underneath. Immediate mode gives
+     * neither for free, so the menu publishes its rectangle here as it is
+     * declared, widgets called later ignore a mouse inside it, and the
+     * drawing is deferred to sn_ui_overlay. */
+    int menuOpen;
+    Rectangle menuRect;
+    const char **menuItems;
+    int menuCount;
+    int menuHover;
+    int menuTag;
+    int menuFresh;        /* set on the frame it opens - see sn_menu_take */
+
+    /* Which text field has the keyboard, by caller-chosen id. While it is
+     * set, the window stops feeding keystrokes to the shortcuts - otherwise
+     * typing a filename with an "s" in it also splits the clip. */
+    int focus;
+    int caret;
+
+    /* Set by the caller around controls that must not take the mouse this
+     * frame - anything under a modal, or everything at all while a clip is
+     * being dragged across the timeline. */
+    int suppress;
+
+    /* One line of help, published by whatever the pointer is over and drawn
+     * at the bottom of the window. Cleared every frame. */
+    char tip[160];
+} sn_ui;
+
+void sn_ui_init(sn_ui *ui);
+void sn_ui_free(sn_ui *ui);
+void sn_ui_frame(sn_ui *ui);       /* call once at the top of each frame */
+void sn_ui_overlay(sn_ui *ui);     /* call last: menus draw here         */
+
+int sn_ui_blocked(const sn_ui *ui);
+int sn_double_click(sn_ui *ui, int id);
+void sn_tip(sn_ui *ui, const char *fmt, ...);
+
+/* ------------------------------------------------------------------ *
+ * Text
+ * ------------------------------------------------------------------ */
+
+void sn_text(const sn_ui *ui, int size, const char *s, float x, float y, Color c);
+void sn_text_spaced(const sn_ui *ui, int size, const char *s, float x, float y, Color c);
+void sn_text_center(const sn_ui *ui, int size, const char *s, float cx, float y, Color c);
+float sn_measure(const sn_ui *ui, int size, const char *s, float spacing);
+/* As much of `s` as fits in `w`, ellipsised with a leading "..." - the end of
+ * a filename tells you more than the start of one. */
+void sn_text_clip(const sn_ui *ui, int size, const char *s, float x, float y,
+                  float w, Color c);
+
+/* ------------------------------------------------------------------ *
+ * Chrome
+ * ------------------------------------------------------------------ */
+
+void sn_panel(Rectangle r, Color fill, Color border);
+void sn_divider(float x, float y, float w);
+
+int sn_button(sn_ui *ui, int id, Rectangle r, const char *label, int enabled);
+int sn_button_lit(sn_ui *ui, int id, Rectangle r, const char *label, int lit);
+
+/* A control drawn as a glyph rather than a word: the transport, the tools,
+ * the per-track switches. Everything in one enum so a caller never has to
+ * know how any of them are drawn. */
+typedef enum {
+    SN_I_PLAY, SN_I_PAUSE, SN_I_STOP, SN_I_START, SN_I_END, SN_I_PREV, SN_I_NEXT,
+    SN_I_SPLIT, SN_I_TRASH, SN_I_PLUS, SN_I_MINUS, SN_I_FOLDER, SN_I_SAVE,
+    SN_I_EXPORT, SN_I_UNDO, SN_I_REDO, SN_I_EYE, SN_I_EYE_OFF, SN_I_SPEAKER,
+    SN_I_MUTE, SN_I_LOCK, SN_I_UNLOCK, SN_I_ZOOM_IN, SN_I_ZOOM_OUT, SN_I_FIT,
+    SN_I_LINK, SN_I_INFO, SN_I_X, SN_I_CHECK, SN_I_SNAP
+} sn_icon;
+
+void sn_draw_icon(sn_icon which, Rectangle r, Color c);
+int sn_icon_button(sn_ui *ui, int id, Rectangle r, sn_icon which, int enabled,
+                   int lit, const char *tip);
+
+/* Off/on, filled when on. */
+int sn_toggle(sn_ui *ui, int id, Rectangle r, const char *label, int on);
+
+/* A horizontal slider. Returns nonzero on any frame the value moved; `v` is
+ * 0..1 and the caller maps it. */
+int sn_slider(sn_ui *ui, int id, Rectangle r, float *v);
+
+/* A number the user drags or types. Returns nonzero when it changed. */
+int sn_field(sn_ui *ui, int id, Rectangle r, std::string &text, const char *hint);
+
+void sn_progress(Rectangle r, float frac, Color fill);
+
+/* ------------------------------------------------------------------ *
+ * Menu
+ * ------------------------------------------------------------------ */
+
+void sn_menu_open(sn_ui *ui, Vector2 at, const char **items, int count, int tag);
+void sn_menu_close(sn_ui *ui);
+/* The index chosen this frame, or -1. Call before sn_ui_overlay. */
+int sn_menu_take(sn_ui *ui, int *tag);
+
+/* ------------------------------------------------------------------ *
+ * S. Tarr
+ *
+ * The mascot, drawn rather than loaded: a five-pointed star with a visor, from
+ * the roster SVG. Drawn because a vector shape this simple is fewer lines than
+ * the code to find, load and scale a file, and it stays crisp at whatever size
+ * the window happens to be.
+ * ------------------------------------------------------------------ */
+
+void sn_star(Vector2 center, float radius, float rotation);
+/* The same mark as a square RGBA image with a transparent background - the
+ * window icon, generated from the geometry so the taskbar icon and the
+ * on-screen one cannot drift apart. The caller owns it. */
+Image sn_star_image(int size);
+
+#endif /* SN_GUI_H */
