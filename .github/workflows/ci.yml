@@ -341,8 +341,19 @@ jobs:
       # The machine that can answer it is the one with the problem on it:
       # bencsnip --timing prints the same list there.
 
+      # A hundred lines of Win32 that walk to a GL context with a clock on
+      # every call. Built here so that a machine with a slow one has
+      # something to run that has no raylib, no GLFW and no ffmpeg in it -
+      # see the comment at the top of the file.
+      - name: The GL probe
+        run: |
+          gcc -O2 -Wall tools/glprobe.c -o glprobe.exe -lopengl32 -lgdi32 -luser32
+          ls -l glprobe.exe
+
       - name: Package
-        run: tools/package.sh windows-x86_64 "$(git rev-parse --short HEAD)"
+        run: |
+          tools/package.sh windows-x86_64 "$(git rev-parse --short HEAD)"
+          cp glprobe.exe dist/ || true
 
       - uses: actions/upload-artifact@v7
         with:
