@@ -3,6 +3,7 @@
 *.d
 *.a
 build/
+dist/
 bencsnip
 bencsnip-probe
 bencsnip-test

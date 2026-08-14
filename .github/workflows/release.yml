@@ -1,0 +1,367 @@
+name: release
+
+# Tag-triggered. CI artifacts expire after ninety days and live on a run page
+# nobody thinks to visit; a release is permanent and sits on the repository
+# front page, which is where someone looking for a binary actually looks.
+#
+#   git tag -a v0.1.0 -m "..." && git push origin v0.1.0
+#
+# What this builds is not what ci.yml builds. CI links the ffmpeg the platform
+# packages, because that is fast and it is what a person building from source
+# will have. A release binary is downloaded by someone who has never installed
+# ffmpeg and never will, so every one of these links a static ffmpeg built here
+# by tools/build-ffmpeg.sh. What comes out needs nothing but the operating
+# system's own libraries, and each job checks that rather than assuming it.
+#
+# That ffmpeg is built with libx264, which is GPL. The archives therefore ship
+# under the GPL as a whole - see NOTICE, and the BINARY-LICENCE.txt each
+# archive carries.
+#
+# The ffmpeg build takes fifteen to thirty minutes per platform and is cached
+# on the hash of the script that produces it, so only the first release after a
+# change to it pays for one.
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (must already exist)'
+        required: true
+
+permissions:
+  contents: write        # needed to create the release
+
+env:
+  RAYLIB_VERSION: "5.5"
+
+jobs:
+  # ------------------------------------------------------------------
+  # Linux, on the oldest runner image still supported: a binary linked
+  # against glibc 2.39 does not start on anything older, and "anything older"
+  # includes most machines someone would want to edit video on.
+  # ------------------------------------------------------------------
+  linux:
+    name: linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-22.04 }
+          - { arch: arm64,  runner: ubuntu-22.04-arm }
+    steps:
+      # The tag, not the branch.
+      #
+      # On a tag push these are the same thing. On workflow_dispatch they are
+      # not: checkout defaults to the branch the run was dispatched from, so
+      # naming a tag would build main's code and attach it to that tag's
+      # release - assets that do not match the commit they claim to be.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Build tools, X11 and GL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm pkg-config git \
+            libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev xvfb ffmpeg
+
+      - name: Cached static ffmpeg
+        id: ffcache
+        uses: actions/cache@v4
+        with:
+          path: vendor/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('tools/build-ffmpeg.sh') }}
+
+      - name: Build static ffmpeg
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        run: tools/build-ffmpeg.sh --jobs 4
+
+      - name: raylib
+        run: |
+          git clone --depth 1 --branch "$RAYLIB_VERSION" \
+            https://github.com/raysan5/raylib.git /tmp/raylib
+          cmake -S /tmp/raylib -B /tmp/raylib/build -DCMAKE_INSTALL_PREFIX=/tmp/rl \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/raylib/build -j3
+          cmake --install /tmp/raylib/build
+
+      - name: What the build decided
+        run: RAYLIB=/tmp/rl make info
+
+      - name: Build
+        run: RAYLIB=/tmp/rl make
+
+      - name: Tests
+        run: |
+          make testmedia
+          make test
+
+      # The whole point of the static build. If an libav* turns up here, the
+      # archive is one that fails to start on the machine it was downloaded to
+      # - and it would do it with a linker error nobody can act on.
+      - name: It carries its own ffmpeg
+        run: |
+          ldd bencsnip
+          if ldd bencsnip | grep -E 'libav|libsw|libx264|libraylib'; then
+            echo "still needs a shared ffmpeg or raylib"
+            exit 1
+          fi
+          echo "self-contained"
+
+      - name: The window comes up
+        run: |
+          xvfb-run -a -s "-screen 0 1400x900x24" \
+            ./bencsnip media/test1.mp4 --shot release-window.png --frames 60
+          test -s release-window.png
+
+      - name: Package
+        run: tools/package.sh "linux-${{ matrix.arch }}" "${{ github.event.inputs.tag || github.ref_name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # macOS, one job per architecture rather than one universal binary: a
+  # universal build needs a universal ffmpeg, which means building it twice
+  # and lipo-ing six static libraries together. Two archives is less
+  # machinery and says plainly which one to download.
+  # ------------------------------------------------------------------
+  macos:
+    name: macos ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: arm64,  runner: macos-latest }
+          - { arch: x86_64, runner: macos-13 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Build tools
+        run: brew install nasm pkg-config ffmpeg
+
+      - name: Cached static ffmpeg
+        id: ffcache
+        uses: actions/cache@v4
+        with:
+          path: vendor/ffmpeg
+          key: ffmpeg-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('tools/build-ffmpeg.sh') }}
+
+      - name: Build static ffmpeg
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        run: tools/build-ffmpeg.sh --jobs 4
+
+      - name: raylib
+        run: |
+          git clone --depth 1 --branch "$RAYLIB_VERSION" \
+            https://github.com/raysan5/raylib.git /tmp/raylib
+          cmake -S /tmp/raylib -B /tmp/raylib/build -DCMAKE_INSTALL_PREFIX=/tmp/rl \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/raylib/build -j3
+          cmake --install /tmp/raylib/build
+
+      - name: What the build decided
+        run: RAYLIB=/tmp/rl make info
+
+      - name: Build
+        run: RAYLIB=/tmp/rl make
+
+      - name: Tests
+        run: |
+          make testmedia
+          make test
+
+      # otool rather than ldd, and the same question: nothing from Homebrew,
+      # which is where a linked ffmpeg would come from and where the person who
+      # downloads this has nothing installed.
+      - name: It carries its own ffmpeg
+        run: |
+          otool -L bencsnip
+          if otool -L bencsnip | grep -E 'libav|libsw|libx264|homebrew|/opt/'; then
+            echo "still needs something from Homebrew"
+            exit 1
+          fi
+          echo "self-contained"
+
+      - name: It runs
+        run: ./bencsnip --version
+
+      - name: Package
+        run: tools/package.sh "macos-${{ matrix.arch }}" "${{ github.event.inputs.tag || github.ref_name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-macos-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # Windows, through MSYS2. The compiler runtime is linked statically by the
+  # Makefile; ffmpeg is static because of the prefix built here. What is left
+  # is the system's own DLLs.
+  # ------------------------------------------------------------------
+  windows:
+    name: windows x86_64
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-ffmpeg
+            git
+            make
+            zip
+            diffutils
+
+      - name: Cached static ffmpeg
+        id: ffcache
+        uses: actions/cache@v4
+        with:
+          path: vendor/ffmpeg
+          key: ffmpeg-windows-x86_64-${{ hashFiles('tools/build-ffmpeg.sh') }}
+
+      - name: Build static ffmpeg
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        run: tools/build-ffmpeg.sh --jobs 4
+
+      - name: raylib
+        run: |
+          git clone --depth 1 --branch "$RAYLIB_VERSION" \
+            https://github.com/raysan5/raylib.git /tmp/raylib
+          make -C /tmp/raylib/src PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC -j2
+          mkdir -p /tmp/rl/include /tmp/rl/lib
+          cp /tmp/raylib/src/raylib.h /tmp/raylib/src/raymath.h /tmp/raylib/src/rlgl.h \
+             /tmp/rl/include/
+          cp /tmp/raylib/src/libraylib.a /tmp/rl/lib/
+
+      - name: What the build decided
+        run: RAYLIB=/tmp/rl make info
+
+      - name: Build
+        run: RAYLIB=/tmp/rl make
+
+      - name: Tests
+        run: |
+          make testmedia
+          make test
+
+      # The import table is the only place the answer lives. Anything from
+      # MSYS2 - the compiler runtime, ffmpeg's DLLs, raylib - means an
+      # executable that starts on this runner and nowhere else.
+      - name: Nothing from MSYS2 in the import table
+        run: |
+          objdump -p bencsnip.exe | grep 'DLL Name'
+          if objdump -p bencsnip.exe | grep -iE 'DLL Name:.*(libgcc|libwinpthread|libstdc|msys-|avcodec|avformat|avutil|swscale|swresample|raylib|x264)'; then
+            echo "links a DLL that will not be present on a user's machine"
+            exit 1
+          fi
+          echo "self-contained"
+
+      - name: Package
+        run: tools/package.sh "windows-x86_64" "${{ github.event.inputs.tag || github.ref_name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-windows-x86_64
+          path: dist/*
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # One release, five archives, one list of checksums.
+  # ------------------------------------------------------------------
+  publish:
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with: { path: dl }
+      - run: ls -lR dl
+
+      # On a tag push GITHUB_REF_NAME is the tag; on workflow_dispatch it is
+      # the branch, which is how a workflow of this shape once published a
+      # release called "main". The input wins whenever it is set.
+      - name: Which version
+        run: |
+          V="${{ github.event.inputs.tag }}"
+          [ -n "$V" ] || V="$GITHUB_REF_NAME"
+          case "$V" in v*) ;; *) echo "refusing to release '$V' - not a v tag"; exit 1;; esac
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+          echo "releasing $V"
+
+      # And the tag has to be the version the code thinks it is. An archive
+      # named v0.2.0 holding a binary whose about box says 0.1.0 is a bug
+      # report filed against the wrong version, months later.
+      - name: The tag matches the source
+        run: tools/check-version.sh "$VERSION"
+
+      - name: Gather
+        run: |
+          mkdir -p dist
+          find dl -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} dist/ \;
+          cd dist
+          sha256sum * > SHA256SUMS
+          ls -l
+          cat SHA256SUMS
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: BENCsnip ${{ env.VERSION }}
+          files: dist/*
+          fail_on_unmatched_files: true
+          body: |
+            A video editor for the jobs that should take a minute.
+
+            **Download the one for your machine, unpack it, run it.** Nothing to
+            install: each binary carries its own ffmpeg, its own raylib, its own
+            font. Linux and macOS builds are tarred rather than zipped because a
+            GitHub zip does not carry the executable bit.
+
+            | file | for |
+            |---|---|
+            | `*-linux-x86_64.tar.gz` | Linux, Intel/AMD |
+            | `*-linux-arm64.tar.gz` | Linux, ARM (Raspberry Pi 5, Ampere) |
+            | `*-macos-arm64.tar.gz` | macOS, Apple silicon |
+            | `*-macos-x86_64.tar.gz` | macOS, Intel |
+            | `*-windows-x86_64.zip` | Windows 10 and later |
+
+            macOS builds are unsigned, so the first launch needs
+            `xattr -dr com.apple.quarantine bencsnip`, or right-click → Open.
+
+            **Licence.** BENCsnip itself is MIT. These binaries statically link
+            FFmpeg built with libx264, which is GPL, so **the binaries are under
+            the GPL as a whole**. Each archive carries `BINARY-LICENCE.txt` and
+            the exact FFmpeg configure line used to build it. Source: this
+            repository, plus FFmpeg and x264 at the versions named in that file.
+
+            `SHA256SUMS` covers every archive here.

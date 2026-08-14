@@ -4,9 +4,15 @@ name: build
 # ffmpeg opens. This is what turns those claims into something verified rather
 # than asserted.
 #
-# Every job that builds something keeps it: an earlier arrangement built three
-# platforms, proved they linked, and then deleted the results, which is most of
-# the reason to build three platforms in the first place.
+# Every job that builds something keeps it. An earlier arrangement built three
+# platforms, proved they linked, and then deleted the results - so CI proved
+# the binaries existed and nothing could be downloaded, which is most of the
+# reason to build three platforms in the first place.
+#
+# These builds link the ffmpeg the platform's package manager ships, which is
+# the right thing here: it is fast, and it is what someone building from source
+# will have. The self-contained binaries - static ffmpeg, nothing to install -
+# are built on a tag by release.yml.
 
 on:
   push:
@@ -14,17 +20,25 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  RAYLIB_VERSION: "5.5"
+
 jobs:
-  # The core links no raylib and opens no window - the property that makes a
+  # The core links no raylib and opens no window: the property that makes a
   # headless render and these tests possible at all. Checked first and on its
-  # own, because if it ever stops being true the GUI jobs below would still
-  # pass and nothing would say so.
+  # own, because if it stops being true the three platform jobs below would
+  # still pass and nothing would say so.
   core:
     name: core (no raylib, no window)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      # Cheap, and it guards a claim the code makes about itself: sn_version.h
+      # says it is the one place a version lives.
+      - name: One version, everywhere
+        run: tools/check-version.sh
 
       - name: ffmpeg development libraries
         run: |
@@ -44,7 +58,8 @@ jobs:
           echo "clean"
 
       # These decode, mix, cut and encode real files. A green tick here means
-      # both export paths produced something ffprobe can read back.
+      # both export paths produced something ffprobe can read back, and that
+      # the mixer's blocks join without a step.
       - name: Test media, then the tests
         run: |
           make testmedia
@@ -53,66 +68,150 @@ jobs:
   linux:
     name: linux
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
-      - name: Dependencies
+      - name: X11, GL and ffmpeg headers
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg libavformat-dev libavcodec-dev \
-                                  libswscale-dev libswresample-dev libavutil-dev \
-                                  libgl1-mesa-dev libx11-dev libxrandr-dev \
-                                  libxinerama-dev libxcursor-dev libxi-dev \
-                                  xvfb libasound2-dev
+            libswscale-dev libswresample-dev libavutil-dev \
+            libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libasound2-dev xvfb
 
+      # From source rather than from apt: the packaged version varies by runner
+      # image, and a build that only compiles against one of them is not much
+      # of a guarantee. Static, so the artifact runs on a machine that has
+      # never heard of raylib.
       - name: raylib
         run: |
-          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib
-          cmake -S raylib -B raylib/build -DBUILD_SHARED_LIBS=OFF \
-                -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/vendor/raylib"
-          cmake --build raylib/build --target install -j
+          git clone --depth 1 --branch "$RAYLIB_VERSION" \
+            https://github.com/raysan5/raylib.git /tmp/raylib
+          cmake -S /tmp/raylib -B /tmp/raylib/build -DCMAKE_INSTALL_PREFIX=/tmp/rl \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/raylib/build -j3
+          cmake --install /tmp/raylib/build
+
+      - name: What the build decided
+        run: RAYLIB=/tmp/rl make info
 
       - name: Build
-        run: make
+        run: RAYLIB=/tmp/rl make
 
-      # A window that comes up, draws the layout and exits is a much stronger
-      # check than a successful link: it exercises the font, the icon, the
-      # decoder and every pane, and it fails loudly if any of them is missing.
-      - name: It opens a window and draws
+      - name: Tests
         run: |
           make testmedia
+          make test
+
+      # The committed icon files are what the packaged builds use, and a
+      # half-finished `make icons` is easy not to notice. Checked by shape
+      # rather than by diffing against a fresh render: the rasteriser goes
+      # through libm, and two platforms' sin and sqrt can disagree in the last
+      # bit, which would turn one antialiased pixel into a red build.
+      - name: The committed icons are the right shape
+        run: |
+          fail=0
+          for s in 16 24 32 48 64 128 256 512; do
+            f="assets/icon/star-$s.png"
+            [ -f "$f" ] || { echo "missing $f"; fail=1; continue; }
+            got=$(file "$f" | sed -n "s/.*, \([0-9]*\) x \([0-9]*\).*/\1x\2/p")
+            [ "$got" = "${s}x${s}" ] || { echo "$f is $got, expected ${s}x${s}"; fail=1; }
+          done
+          [ -f assets/icon/bencsnip.ico ] || { echo "missing bencsnip.ico"; fail=1; }
+          exit $fail
+
+      # A window nobody opens is a window nobody has tested. Under Xvfb this
+      # creates a real GL context, loads the embedded font, decodes a file,
+      # composites it and draws sixty frames of the whole interface. It is the
+      # cheapest check there is that the program starts at all.
+      - name: The window comes up, with something on the timeline
+        run: |
           xvfb-run -a -s "-screen 0 1400x900x24" \
-            ./bencsnip media/test1.mp4 --shot ci-shot.png --frames 60
-          test -s ci-shot.png
+            ./bencsnip media/test1.mp4 --shot ci-window.png --frames 60
+          test -s ci-window.png
+          ls -l ci-window.png
+
+      # Tarred rather than uploaded bare. upload-artifact zips whatever it is
+      # given, and the zip format as GitHub writes it does not carry the
+      # executable bit - so a downloaded binary needs a chmod before it will
+      # run, which nobody expects and nothing tells them. A tar carries the
+      # mode.
+      - name: Package
+        run: |
+          D="bencsnip-$(git rev-parse --short HEAD)-linux-x86_64"
+          mkdir -p "$D"
+          cp bencsnip README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
+          tar czf "$D.tar.gz" "$D"
+          echo "PKG=$D.tar.gz" >> "$GITHUB_ENV"
+          ls -l "$D.tar.gz"
 
       - uses: actions/upload-artifact@v4
         with:
           name: bencsnip-linux
-          path: |
-            bencsnip
-            ci-shot.png
+          path: ${{ env.PKG }}
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshot
+          path: ci-window.png
+          if-no-files-found: error
 
   macos:
     name: macos
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-      - name: Dependencies
-        run: brew install ffmpeg raylib
+
+      - name: ffmpeg
+        run: brew install ffmpeg pkg-config
+
+      # From source and static, not `brew install raylib`. Homebrew's is a
+      # dylib under /opt/homebrew, and a binary linked against it aborts at
+      # launch on any machine without that exact library - which is every
+      # machine that has just downloaded a build.
+      - name: raylib
+        run: |
+          git clone --depth 1 --branch "$RAYLIB_VERSION" \
+            https://github.com/raysan5/raylib.git /tmp/raylib
+          cmake -S /tmp/raylib -B /tmp/raylib/build -DCMAKE_INSTALL_PREFIX=/tmp/rl \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/raylib/build -j3
+          cmake --install /tmp/raylib/build
+
+      - name: What the build decided
+        run: RAYLIB=/tmp/rl make info
+
       - name: Build
-        run: make
+        run: RAYLIB=/tmp/rl make
+
+      - name: Tests
+        run: |
+          make testmedia
+          make test
+
+      # No window here: a macOS runner has no display, and unlike X11 there is
+      # no Xvfb to stand in for one. The Linux job covers that; this one covers
+      # the link, which is where macOS differs.
       - name: It runs
         run: ./bencsnip --version
 
-      # The zip GitHub writes does not carry the executable bit, so anything
-      # downloaded from here needs a chmod +x before it will start. Said here
-      # rather than discovered there.
+      - name: Package
+        run: |
+          D="bencsnip-$(git rev-parse --short HEAD)-macos-arm64"
+          mkdir -p "$D"
+          cp bencsnip README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
+          tar czf "$D.tar.gz" "$D"
+          echo "PKG=$D.tar.gz" >> "$GITHUB_ENV"
+          ls -l "$D.tar.gz"
+
       - uses: actions/upload-artifact@v4
         with:
           name: bencsnip-macos
-          path: bencsnip
+          path: ${{ env.PKG }}
+          if-no-files-found: error
 
   windows:
     name: windows
@@ -125,31 +224,84 @@ jobs:
       - uses: actions/checkout@v4
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: true
           install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-ffmpeg
+            git
             make
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-pkg-config
-            mingw-w64-x86_64-ffmpeg
-            mingw-w64-x86_64-raylib
+            zip
+
+      # raylib's own Makefile, not cmake. cmake's "MinGW Makefiles" generator
+      # wants mingw32-make, a separate package from the MSYS make that is
+      # already here, and picking the wrong generator fails at configure time
+      # for reasons unrelated to this project.
+      - name: raylib
+        run: |
+          git clone --depth 1 --branch "$RAYLIB_VERSION" \
+            https://github.com/raysan5/raylib.git /tmp/raylib
+          make -C /tmp/raylib/src PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC -j2
+          mkdir -p /tmp/rl/include /tmp/rl/lib
+          cp /tmp/raylib/src/raylib.h /tmp/raylib/src/raymath.h /tmp/raylib/src/rlgl.h \
+             /tmp/rl/include/
+          cp /tmp/raylib/src/libraylib.a /tmp/rl/lib/
+
+      # raylib is built from source above, so RAYLIB= is set and pkg-config is
+      # never consulted for it. Printed anyway: this is the output to read
+      # first when a Windows link fails, and it should not take a code change
+      # to get.
+      - name: What the build decided
+        run: RAYLIB=/tmp/rl make info
 
       - name: Build
-        run: make
+        run: RAYLIB=/tmp/rl make
 
-      # Without -static the executable imports three DLLs that live inside an
-      # MSYS2 installation and nowhere else: it runs here and fails to start on
-      # every machine that downloads it. The import table is the only place the
-      # answer lives, so that is what gets checked.
-      - name: No MSYS2 runtime DLLs in the import table
+      - name: Tests
         run: |
-          if objdump -p bencsnip.exe | grep -iE 'libstdc\+\+-6|libgcc_s|libwinpthread'; then
-            echo "the executable needs MSYS2 DLLs to start"
+          make testmedia
+          make test
+
+      # The compiler runtime is linked statically, so a downloaded binary does
+      # not need MSYS2's DLLs on PATH - which the person who downloaded it does
+      # not have and would have no reason to install. The import table is the
+      # only place the answer lives; grepping the Makefile cannot tell you
+      # whether the flag survived.
+      #
+      # ffmpeg's own DLLs are a different matter and are expected here: this
+      # job links the packaged ffmpeg on purpose. release.yml builds the static
+      # one and checks that none of these remain.
+      - name: No MSYS2 compiler-runtime DLLs
+        run: |
+          if objdump -p bencsnip.exe | grep -iE 'DLL Name:.*(libgcc|libwinpthread|libstdc|msys-)'; then
+            echo "links a runtime DLL that will not be present on a user's machine"
             exit 1
           fi
-          echo "clean"
+          echo "self-contained, apart from ffmpeg"
+
+      # Zipped here rather than left to upload-artifact so the archive has one
+      # named folder at its root instead of loose files, and so the name says
+      # which commit it came from. Windows has no executable bit to lose, so
+      # the zip is not the hazard it is on the other two platforms.
+      #
+      # The ffmpeg DLLs travel with it, because this build needs them.
+      - name: Package
+        run: |
+          D="bencsnip-$(git rev-parse --short HEAD)-windows-x86_64"
+          mkdir -p "$D"
+          cp bencsnip.exe README.md ARCHITECTURE.md LICENSE NOTICE "$D"/
+          for dll in $(objdump -p bencsnip.exe | sed -n 's/.*DLL Name: \(av\|sw\|postproc\).*/&/p' \
+                       | sed 's/.*DLL Name: //'); do
+            cp "/ucrt64/bin/$dll" "$D"/ 2>/dev/null || true
+          done
+          ls "$D"
+          zip -qr "$D.zip" "$D"
+          echo "PKG=$D.zip" >> "$GITHUB_ENV"
+          ls -l "$D.zip"
 
       - uses: actions/upload-artifact@v4
         with:
           name: bencsnip-windows
-          path: bencsnip.exe
+          path: ${{ env.PKG }}
+          if-no-files-found: error
