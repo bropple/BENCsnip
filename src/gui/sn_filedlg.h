@@ -2,11 +2,13 @@
  * BENCsnip - native open and save dialogs
  *
  * raylib has no file dialog, and the alternatives are worse than this file.
- * Bundling one of the single-header dialog libraries would end the claim that
- * raylib and ffmpeg are the only third-party dependencies, over a feature that
- * is a system call on every platform this targets. So each platform gets the
- * dialog it already has, and nothing is linked that the system does not
- * already ship:
+ * Bundling one of the single-header dialog libraries would be a third-party
+ * dependency taken on over a feature that is a system call on every platform
+ * this targets. (There is one such header in the tree - stb_truetype, for
+ * drawing text on the picture - and the test it had to pass was that nothing
+ * the system ships could do the job. A file dialog does not pass it.) So each
+ * platform gets the dialog it already has, and nothing is linked that the
+ * system does not already ship:
  *
  *   Windows   GetOpenFileName / GetSaveFileName from comdlg32, part of the OS
  *   macOS     NSOpenPanel and NSSavePanel, in sn_filedlg_mac.mm

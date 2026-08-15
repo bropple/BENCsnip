@@ -6,6 +6,7 @@
 src/core/     sn_media.*      libav: probe, decode, seek, scale, resample
               sn_timeline.*   tracks, clips, and every edit anything can make
               sn_render.*     the timeline as pictures and sound
+              sn_text.*       glyphs into pixels, for text on the picture
               sn_project.*    the .bencsnip file
               sn_export.*     the fast path and the rendering path
               sn_version.h    one place for the version number
@@ -23,9 +24,12 @@ src/gui/      sn_gui.*        theme and widget set
 ```
 
 `src/core` does not include raylib, does not open a window and does not know
-what a mouse is. `make test` builds and runs it on a machine with no screen and
-no sound card, which is what keeps that rule honest. Everything a headless
-render would need is already there.
+what a mouse is. It does now rasterise text, with a vendored stb_truetype -
+because the exporter has to draw the same captions the preview does, and the
+moment those are two pieces of code they are two answers. `make test` builds
+and runs it on a machine with no screen and no sound card, which is what keeps
+that rule honest. Everything a headless render would need is already there —
+including the font, which is why the embedded assets live in `src/core`.
 
 ## Time
 

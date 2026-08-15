@@ -144,6 +144,12 @@ A GNU makefile, a C++17 compiler, raylib and the ffmpeg libraries. No CMake
 step, no package manager, no code generation beyond turning the font into a C
 array.
 
+The one thing that is neither installed nor linked is `vendor/stb/stb_truetype.h`,
+which is committed here: a single public-domain header, byte for byte the copy
+raylib carries, used by `src/core` to turn text overlays into pixels. It is in
+the core rather than the interface because the exporter has to draw the same
+captions the preview does, and `src/core` has no raylib to ask.
+
 ### Linux
 
 ```
@@ -342,8 +348,9 @@ camera is the thing that has to read.
 MIT — see [LICENSE](LICENSE).
 
 BENCsnip links FFmpeg (LGPL v2.1+, and GPL when built with `--enable-gpl`
-components such as libx264), raylib (zlib/libpng), and embeds Terminus (TTF)
-under the SIL Open Font License. [NOTICE](NOTICE) has the full attribution and
+components such as libx264) and raylib (zlib/libpng), vendors stb_truetype
+(public domain / MIT), and embeds Terminus (TTF) under the SIL Open Font
+License. [NOTICE](NOTICE) has the full attribution and
 what it obliges you to do when you redistribute a binary; the information
 window in the program shows the same text, which is how a binary-only copy
 satisfies the OFL.

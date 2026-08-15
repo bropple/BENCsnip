@@ -8,7 +8,7 @@ bencsnip
 bencsnip-probe
 bencsnip-test
 mkembed
-src/gui/sn_embed.c
+src/core/sn_embed.c
 *.exe
 *.res.o
 .ffmpeg-prefix
@@ -16,7 +16,10 @@ src/gui/sn_embed.c
 # Third-party libraries built or copied in locally. raylib and ffmpeg are
 # build dependencies, not part of this project's source - see the Makefile for
 # how they are found, and README.md for how to put one here.
-vendor/
+# Built prefixes get dropped in here and are not source. The one exception is
+# a single vendored header that is: see vendor/stb.
+vendor/*
+!vendor/stb/
 
 # Brand/style assets, kept out of the public repo.
 style/

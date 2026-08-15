@@ -14,6 +14,7 @@
 #include "sn_media.h"
 #include "sn_project.h"
 #include "sn_render.h"
+#include "sn_text.h"
 #include "sn_timeline.h"
 
 #include <algorithm>
@@ -946,11 +947,140 @@ static void test_export()
     }
 }
 
+/* ------------------------------------------------------------------ *
+ * Text
+ *
+ * Needs no media and no ffmpeg: the font is compiled into the library, which
+ * is the whole reason the embedded assets moved into the core. So this runs
+ * on a machine with an empty media/ directory, which the rest of these do not.
+ * ------------------------------------------------------------------ */
+
+static void test_text()
+{
+    printf("text\n");
+
+    const int W = 320, H = 180;
+    std::vector<uint8_t> c((size_t)W * H * 4, 0);
+    for (size_t i = 0; i < (size_t)W * H; i++) c[i * 4 + 3] = 255;
+
+    auto lit = [&]() {
+        int n = 0;
+        for (size_t i = 0; i < (size_t)W * H; i++)
+            if (c[i * 4] || c[i * 4 + 1] || c[i * 4 + 2]) n++;
+        return n;
+    };
+    auto clear = [&]() {
+        std::fill(c.begin(), c.end(), (uint8_t)0);
+        for (size_t i = 0; i < (size_t)W * H; i++) c[i * 4 + 3] = 255;
+    };
+
+    /* Nothing to draw is false, and leaves the canvas alone. */
+    sn::TextStyle none;
+    CHECK(!sn::drawText(none, c.data(), W, H), "empty text draws nothing");
+    CHECK(lit() == 0, "and puts no pixels down");
+
+    /* Something to draw is true, and puts white where it said it would. */
+    sn::TextStyle st;
+    st.text = "Hi";
+    st.size = 0.4;
+    st.fill = 0xffffffffu;
+    st.outlineWidth = 0.0;
+    CHECK(sn::drawText(st, c.data(), W, H), "text draws");
+    const int plain = lit();
+    CHECK(plain > 0, "and lights pixels, got %d", plain);
+
+    /* An outline is more pixels than no outline, and none of the extra ones
+     * are the fill colour - which is what catches an outline drawn over the
+     * letter instead of under it. */
+    clear();
+    sn::TextStyle out = st;
+    out.outline = 0xff0000ffu;
+    out.outlineWidth = 0.25;
+    CHECK(sn::drawText(out, c.data(), W, H), "outlined text draws");
+    const int outlined = lit();
+    CHECK(outlined > plain, "an outline covers more, %d vs %d", outlined, plain);
+
+    int red = 0, white = 0;
+    for (size_t i = 0; i < (size_t)W * H; i++) {
+        const uint8_t *p = &c[i * 4];
+        if (p[0] > 200 && p[1] < 60 && p[2] < 60) red++;
+        if (p[0] > 200 && p[1] > 200 && p[2] > 200) white++;
+    }
+    CHECK(red > 0, "the outline colour is on the canvas, got %d", red);
+    CHECK(white > 0, "and the fill is still on top of it, got %d", white);
+
+    /* Alpha fades it the way a clip's fade does. */
+    clear();
+    sn::drawText(st, c.data(), W, H, 0.25);
+    int bright = 0;
+    for (size_t i = 0; i < (size_t)W * H; i++)
+        if (c[i * 4] > 200) bright++;
+    CHECK(bright == 0, "a quarter alpha leaves nothing at full brightness, got %d", bright);
+    CHECK(lit() > 0, "but it is still there");
+
+    /* --- the box --- */
+    double k[8], k2[8];
+    CHECK(sn::textBox(st, W, H, k), "the box is reported");
+
+    const double bw = k[2] - k[0], bh = k[5] - k[1];
+    CHECK(bw > 0 && bh > 0, "and has a size, %f x %f", bw, bh);
+
+    sn::TextStyle right = st;
+    right.x = 0.9;
+    CHECK(sn::textBox(right, W, H, k2), "the box moves with x");
+    CHECK(k2[0] > k[0], "to the right, %f vs %f", k2[0], k[0]);
+
+    /* Rotation tilts it: the top edge stops being level. */
+    sn::TextStyle spun = st;
+    spun.rotation = 30.0;
+    CHECK(sn::textBox(spun, W, H, k2), "a rotated box is reported");
+    CHECK(std::fabs(k2[3] - k2[1]) > 1.0, "and its top edge is not level, %f vs %f",
+          k2[1], k2[3]);
+
+    /* A font that is not there falls back and says so, rather than drawing
+     * nothing and leaving somebody to wonder where the caption went. */
+    sn::TextStyle gone = st;
+    gone.font = "/definitely/not/a/font.ttf";
+    clear();
+    CHECK(sn::drawText(gone, c.data(), W, H), "a missing font still draws");
+    CHECK(lit() > 0, "in the embedded face");
+    CHECK(sn::textMissingFont(gone), "and reports that it fell back");
+    CHECK(!sn::textMissingFont(st), "while the embedded face is not a fallback");
+
+    /* Two lines are taller than one. */
+    sn::TextStyle two = st;
+    two.text = "Hi\nHi";
+    double k3[8];
+    CHECK(sn::textBox(two, W, H, k3), "a second line is measured");
+    CHECK((k3[5] - k3[1]) > bh * 1.5, "and is most of twice as tall, %f vs %f",
+          k3[5] - k3[1], bh);
+
+    /* Whatever this machine has. Not required to be more than none - a
+     * container with no fonts installed is a legal place to run the tests -
+     * but everything it does report has to be usable. */
+    const std::vector<sn::FontEntry> &fonts = sn::systemFonts();
+    printf("  (%d system fonts on this machine)\n", (int)fonts.size());
+    bool named = true;
+    for (const sn::FontEntry &f : fonts)
+        if (f.name.empty() || f.path.empty()) named = false;
+    CHECK(named, "every font found has a name and a path");
+
+    if (!fonts.empty()) {
+        sn::TextStyle sys = st;
+        sys.font = fonts[0].path;
+        clear();
+        CHECK(sn::drawText(sys, c.data(), W, H), "a system font draws");
+        CHECK(!sn::textMissingFont(sys), "and is not a fallback: %s",
+              fonts[0].name.c_str());
+    }
+}
+
 int main()
 {
     printf("BENCsnip core tests\n\n");
 
     test_timeline();
+    test_text();
 
     if (have(V1) && have(V2) && have(A1)) {
         test_media();

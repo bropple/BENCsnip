@@ -1,7 +1,7 @@
 /*
- * BENCsnip GUI - assets compiled into the binary
+ * BENCsnip - assets compiled into the binary
  *
- * Generated into src/gui/sn_embed.c by tools/mkembed.c at build time. The
+ * Generated into src/core/sn_embed.c by tools/mkembed.c at build time. The
  * files in assets/ stay the single source; nothing here is committed.
  *
  * The font is in here because a font beside an executable is a font that can

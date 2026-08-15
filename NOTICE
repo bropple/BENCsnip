@@ -74,7 +74,43 @@ The window, the input and the drawing. Statically linked into the editor.
 
 raylib bundles GLFW (zlib/libpng), miniaudio (public domain / MIT-0), stb_image,
 stb_truetype and stb_vorbis (public domain / MIT). Their notices travel with the
-raylib source.
+raylib source. BENCsnip also carries its own copy of stb_truetype, for the
+reason given in the next section.
+
+================================================================================
+2a. stb_truetype  (vendor/stb/stb_truetype.h)
+================================================================================
+
+The font rasteriser behind text overlays. Committed to this repository and
+compiled into src/core, rather than reached through raylib, because the
+exporter has to draw the same captions the preview does and src/core has no
+raylib in it. The file is byte for byte the copy raylib carries, taken from
+upstream unmodified.
+
+    stb_truetype.h <https://github.com/nothings/stb>
+    Copyright (c) 2017 Sean Barrett
+
+    Dual-licensed: public domain (Unlicense) or MIT, at your option.
+
+    MIT: Permission is hereby granted, free of charge, to any person obtaining
+    a copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to permit
+    persons to whom the Software is furnished to do so, subject to the
+    following conditions: The above copyright notice and this permission
+    notice shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+
+    The full text of both options is at the end of vendor/stb/stb_truetype.h.
 
 ================================================================================
 3. Terminus (TTF)  (assets/fonts/TerminusTTF.ttf)

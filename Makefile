@@ -35,6 +35,7 @@ else
 endif
 
 CORE_SRC := src/core/sn_media.cpp \
+            src/core/sn_text.cpp \
             src/core/sn_render.cpp \
             src/core/sn_timeline.cpp \
             src/core/sn_project.cpp \
@@ -87,10 +88,10 @@ TEST_OBJ := $(TEST_SRC:.cpp=.o)
 TEST     := bencsnip-test$(EXE)
 
 # ------------------------------------------------------------------
-# Assets live in the binary, not beside it - see src/gui/sn_embed.h.
+# Assets live in the binary, not beside it - see src/core/sn_embed.h.
 # ------------------------------------------------------------------
-EMBED    := src/gui/sn_embed.c
-EMBED_OBJ:= src/gui/sn_embed.o
+EMBED    := src/core/sn_embed.c
+EMBED_OBJ:= src/core/sn_embed.o
 EMBED_IN := assets/fonts/TerminusTTF.ttf \
             assets/brand/BENCO_Logo_Terminal.png \
             assets/icon/icon-16.png \
@@ -100,7 +101,7 @@ EMBED_IN := assets/fonts/TerminusTTF.ttf \
             assets/fonts/OFL.txt \
             LICENSE \
             NOTICE
-GUI_OBJ  += $(EMBED_OBJ) $(PROBE_IN_GUI_OBJ)
+GUI_OBJ  += $(PROBE_IN_GUI_OBJ)
 
 $(PROBE_IN_GUI_OBJ): $(PROBE_IN_GUI)
 	$(CC) $(CFLAGS) -DSN_GLPROBE_EMBEDDED -c $< -o $@
@@ -276,7 +277,10 @@ $(CORE_OBJ) $(GUI_OBJ) $(PROBE_OBJ) $(TEST_OBJ): $(FF_STAMP)
 $(CORE_OBJ): %.o: %.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(CORE_LIB): $(CORE_OBJ)
+# The embedded assets go in the core library rather than beside the GUI's
+# objects, because the font is now one of them and the renderer draws text
+# with it. A headless render - which is what `make test` is - has to have it.
+$(CORE_LIB): $(CORE_OBJ) $(EMBED_OBJ)
 	$(AR) rcs $@ $^
 
 mkembed$(EXE): tools/mkembed.c
@@ -341,12 +345,12 @@ info:
 	@echo "  ffmpeg libs  = $(FF_LIBS)"
 
 clean:
-	rm -f $(CORE_OBJ) $(GUI_OBJ) $(PROBE_OBJ) $(TEST_OBJ) $(GUI_RES) \
+	rm -f $(CORE_OBJ) $(GUI_OBJ) $(EMBED_OBJ) $(PROBE_OBJ) $(TEST_OBJ) $(GUI_RES) \
 	      $(CORE_LIB) $(GUI) $(PROBE) $(TEST) mkembed$(EXE) $(EMBED) \
 	      src/core/*.d src/gui/*.d tools/*.d tests/*.d $(FF_STAMP)
 
 -include $(CORE_SRC:.cpp=.d) $(GUI_SRC:.cpp=.d) $(PROBE_SRC:.cpp=.d) \
-         $(TEST_SRC:.cpp=.d) $(GUI_MM:.mm=.d) src/gui/sn_embed.d
+         $(TEST_SRC:.cpp=.d) $(GUI_MM:.mm=.d) src/core/sn_embed.d
 
 # ------------------------------------------------------------------
 # Test media. Three small files covering the cases that matter: an mp4 with
