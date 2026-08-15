@@ -1097,25 +1097,6 @@ static int g_shotAfter = 60;
 
 
 /* ------------------------------------------------------------------ *
- * The splash
- *
- * Not decoration, and not a delay: the window exists from the moment
- * InitWindow returns, and without this it sits there empty until every other
- * piece of startup has finished. On a machine where the graphics driver takes
- * its time, or where a project on the command line has twenty clips to probe,
- * that empty window is the program looking hung while it works.
- *
- * So it draws once per phase, saying which phase. Everything it needs - the
- * icon, the wordmark, the font - is already inside the executable, and the
- * font is loaded first precisely so this can use it.
- *
- * What it cannot cover is anything before InitWindow: the loader mapping a
- * 28 MB binary, a virus scanner reading all of it, Gatekeeper verifying a
- * signature. Those happen before a line of this program runs, and no splash
- * screen in any program has ever covered them.
- * ------------------------------------------------------------------ */
-
-/* ------------------------------------------------------------------ *
  * How long each part of starting up took
  *
  * Kept because startup is the one thing that cannot be measured from here:
@@ -1272,109 +1253,28 @@ void timing_report()
     if (g_logf && g_timing) printf("  this was also written to %s\n\n", g_logPath.c_str());
 }
 
-struct Splash {
-    Texture2D mark = {};      /* the BENCO wordmark   */
-    Texture2D icon = {};      /* the program's icon   */
-    bool ready = false;
-    bool shown = false;       /* the panel has been on screen at least once */
-
-    /* No minimum time on screen, deliberately: it is up for exactly as long
-     * as there is work behind it, and a splash screen that outstays the
-     * loading it reports is the thing this program's README makes fun of
-     * Clipchamp for. There is a minimum before it appears at all, though -
-     * see splashDraw. */
-};
-
-Splash g_splash;
-
-void splashInit(App &a)
-{
-    Image m = LoadImageFromMemory(".png", SN_LOGO_PNG, (int)SN_LOGO_PNG_LEN);
-    if (m.data) { g_splash.mark = LoadTextureFromImage(m); UnloadImage(m); }
-
-    Image i = LoadImageFromMemory(".png", SN_ICON_64, (int)SN_ICON_64_LEN);
-    if (i.data) { g_splash.icon = LoadTextureFromImage(i); UnloadImage(i); }
-
-    g_splash.ready = true;
-    (void)a;
-}
-
-/* One frame. `frac` is how far through startup we are, and is honest rather
- * than smooth - it moves when something actually finished.
+/* One cleared frame, before any of the work below.
  *
- * The window is always cleared, so that what is on screen from the first
- * moment is the program's own background rather than whatever was behind it.
- * The panel on top of that only appears once startup has gone on long enough
- * to be worth reporting - a quarter of a second - because a splash screen
- * that comes and goes inside a blink is a flash of furniture, which is worse
- * than nothing at all. On a machine where the whole of startup is two hundred
- * milliseconds nobody ever sees it, and nobody should.
+ * There used to be a splash screen here: a panel with the wordmark, the
+ * version and a progress bar, redrawn between the phases of startup. It was
+ * built when startup could take ten and a half seconds, and it existed to say
+ * that the ten and a half seconds were being spent rather than lost. That
+ * cause is gone - it was GLFW enumerating game controllers, and it is not
+ * enumerated any more - so what is left is furniture in front of a program
+ * that is already ready, which is the thing this one's README makes fun of
+ * Clipchamp for.
  *
- * Once it has been shown it keeps being shown, so it cannot appear for one
- * phase and vanish for the next. */
-void splashDraw(App &a, const char *phase, float frac)
+ * This much stays. Between the window appearing and the first pass of the
+ * loop the back buffer holds whatever was there before, and on some systems
+ * that is the desktop behind it; one clear means the first thing on screen is
+ * this program's own background. It is also what "first frame" is a mark for,
+ * which is the number the information window reports as how long the window
+ * took to appear. */
+void first_frame()
 {
-    if (!g_splash.ready) return;
-
-    const double elapsed =
-        std::chrono::duration<double, std::milli>(sn_clock::now() - g_t0).count();
-    if (!g_splash.shown && elapsed < 250.0) {
-        BeginDrawing();
-        ClearBackground(SN_BG);
-        EndDrawing();
-        return;
-    }
-    g_splash.shown = true;
-
-    const float W = (float)GetScreenWidth(), H = (float)GetScreenHeight();
-
     BeginDrawing();
     ClearBackground(SN_BG);
-
-    /* A panel rather than the whole window: the window is 1280 wide and a
-     * wordmark stranded in the middle of that much near-black reads as a
-     * program that has failed to draw itself. */
-    Rectangle box = {std::floor(W * 0.5f - 210), std::floor(H * 0.5f - 100), 420, 200};
-    sn_panel(box, SN_PANEL, SN_BORDER);
-
-    if (g_splash.icon.id) {
-        DrawTexturePro(g_splash.icon,
-                       Rectangle{0, 0, (float)g_splash.icon.width,
-                                 (float)g_splash.icon.height},
-                       Rectangle{box.x + 26, box.y + 30, 64, 64}, Vector2{0, 0}, 0,
-                       WHITE);
-    }
-
-    if (g_splash.mark.id) {
-        const float mw = 150.0f;
-        const float mh = mw * (float)g_splash.mark.height / g_splash.mark.width;
-        DrawTexturePro(g_splash.mark,
-                       Rectangle{0, 0, (float)g_splash.mark.width,
-                                 (float)g_splash.mark.height},
-                       Rectangle{box.x + 110, box.y + 30, mw, mh}, Vector2{0, 0}, 0,
-                       SN_EDGE);
-    }
-
-    sn_text_spaced(&a.ui, SN_F_TITLE, SN_NAME, box.x + 110, box.y + 62, SN_TEXT);
-    sn_text(&a.ui, SN_F_SMALL, "version " SN_VERSION, box.x + 112, box.y + 96, SN_DIM);
-
-    sn_divider(box.x + 26, box.y + 132, box.width - 52);
-
-    /* The bar is thin and the phase is spelled out beside it. A bar on its own
-     * says how long; the words say what for, which is the part that tells you
-     * it is alive rather than stuck. */
-    Rectangle bar = {box.x + 26, box.y + 168, box.width - 52, 6};
-    sn_progress(bar, frac, SN_ACCENT);
-    sn_text(&a.ui, SN_F_TINY, phase, box.x + 26, box.y + 146, SN_DIM);
-
     EndDrawing();
-}
-
-void splashDone()
-{
-    if (g_splash.mark.id) UnloadTexture(g_splash.mark);
-    if (g_splash.icon.id) UnloadTexture(g_splash.icon);
-    g_splash = Splash{};
 }
 
 } /* namespace */
@@ -1419,20 +1319,17 @@ static int run(int argc, char **argv)
     sn_appmenu_install();
     SetExitKey(KEY_NULL);            /* Escape clears the selection */
 
-    /* The font before anything else, because the splash writes with it and
-     * the splash is what covers everything after this line. It costs a
-     * millisecond and a half. */
+    /* The font before anything else. Everything this program draws is drawn
+     * with it, and it costs a millisecond and a half. */
     App a;
     sn_ui_init(&a.ui);
     mark("font");
-    splashInit(a);
-    splashDraw(a, "starting", 0.15f);
+    first_frame();
     mark("first frame");
 
     emit("  ... opening an audio device\n");
     InitAudioDevice();
     mark("audio");
-    splashDraw(a, "sound", 0.35f);
 
     {
         /* Four sizes rather than one: a window manager picks the nearest and
@@ -1462,8 +1359,6 @@ static int run(int argc, char **argv)
     }
     mark("icons");
 
-    splashDraw(a, "decoders", 0.55f);
-
     a.proj = newProject();
     a.hist.reset(a.proj);
     a.player.start();
@@ -1480,11 +1375,6 @@ static int run(int argc, char **argv)
                 i++;
             continue;
         }
-        /* Named before it is opened, not after: probing a file on a slow
-         * disk is the one part of startup that can take real time, and the
-         * name of the file it is working on is the difference between a
-         * progress bar and an answer. */
-        splashDraw(a, GetFileName(argv[i]), 0.7f);
         doImport(a, argv[i], true);
     }
     /* The playhead ends up past the last import; the point of opening a file
@@ -1501,8 +1391,6 @@ static int run(int argc, char **argv)
 
     mark("files named");
 
-    splashDraw(a, "ready", 1.0f);
-    splashDone();
     timing_report();
 
     int frames = 0;
