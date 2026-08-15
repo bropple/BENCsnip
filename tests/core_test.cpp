@@ -552,6 +552,79 @@ static void test_render()
     CHECK(f.valid(), "past the end still returns a frame");
     CHECK(f.rgba[0] == 0 && f.rgba[1] == 0 && f.rgba[2] == 0, "and it is black");
 
+    /* --- a caption on the picture ---
+     *
+     * A text track is composited with the video ones, in list order, which is
+     * what makes a caption something that can be put behind one layer and in
+     * front of another. Here it goes in front, so it must change the frame.
+     *
+     * Every check is the same frame with the text track muted against it
+     * unmuted, rather than against a colour that ought to be unique. It is
+     * not: the first version of this looked for magenta pixels, and testsrc2
+     * is colour bars, one of which is magenta. Muting is also exactly the
+     * question being asked - does the caption draw - so it tests muting for
+     * free rather than needing its own case.
+     */
+    {
+        const int ti = sn::addTrack(p, sn::TRACK_TEXT);
+        CHECK(ti >= 0, "a text track can be added");
+        CHECK(p.tracks[ti].kind == sn::TRACK_TEXT, "and is one");
+        CHECK(sn::visualTrack(p.tracks[ti].kind), "and is in the visual band");
+
+        sn::Clip cap;
+        cap.id = p.newId();
+        cap.in = 0.0;
+        cap.out = 4.0;
+        cap.pos = 0.0;
+        cap.text.text = "HELLO";
+        cap.text.size = 0.5;
+        cap.text.fill = 0xff00ffffu;
+        cap.text.outlineWidth = 0.0;
+        CHECK(sn::addClip(p, ti, cap) != nullptr, "and holds a caption");
+
+        auto frame = [&](double t, bool on) {
+            p.tracks[ti].muted = !on;
+            sn::VideoFrame f;
+            r.videoAt(t, 160, 90, &f);
+            return f.rgba;
+        };
+        auto differing = [](const std::vector<uint8_t> &x,
+                            const std::vector<uint8_t> &y) {
+            int n = 0;
+            for (size_t i = 0; i + 3 < x.size() && i + 3 < y.size(); i += 4)
+                if (x[i] != y[i] || x[i + 1] != y[i + 1] || x[i + 2] != y[i + 2]) n++;
+            return n;
+        };
+
+        const std::vector<uint8_t> off1 = frame(1.0, false);
+        const std::vector<uint8_t> on1 = frame(1.0, true);
+        const int drew = differing(off1, on1);
+        CHECK(drew > 0, "the caption changed the frame, %d pixels", drew);
+
+        /* And in its own colour - counted only among the pixels it changed,
+         * so the colour bars underneath cannot answer for it. */
+        int mine = 0;
+        for (size_t i = 0; i + 3 < on1.size(); i += 4) {
+            if (off1[i] == on1[i] && off1[i + 1] == on1[i + 1] &&
+                off1[i + 2] == on1[i + 2])
+                continue;
+            if (on1[i] > 200 && on1[i + 1] < 60 && on1[i + 2] > 200) mine++;
+        }
+        CHECK(mine > 0, "in the colour it was given, %d pixels", mine);
+
+        /* Past the end of the caption there is no caption, so muting it
+         * changes nothing at all. */
+        const std::vector<uint8_t> off6 = frame(6.0, false);
+        const std::vector<uint8_t> on6 = frame(6.0, true);
+        CHECK(differing(off6, on6) == 0, "and nothing is drawn after it ends");
+
+        /* The last text track comes out again, unlike the last video or audio
+         * one: a project with no captions in it is an ordinary project. */
+        CHECK(sn::removeTrack(p, ti), "and the last text track can be removed");
+        for (const sn::Track &x : p.tracks)
+            CHECK(x.kind != sn::TRACK_TEXT, "leaving none behind");
+    }
+
     /* The mix has sound where a clip is and silence where none is. */
     std::vector<float> mix(1024 * sn::CHANS);
     r.audioAt(2.0, 1024, mix.data());
@@ -627,10 +700,40 @@ static void test_project()
 
     sn::placeItem(p, a, 1.0);
     sn::splitAt(p, 3.0);
-    p.tracks[1].clips[0].gain = 0.5;
-    p.tracks[1].gain = 0.75;
-    p.tracks[0].clips[0].fadeOut = 0.4;
+
+    /* A text track goes into the visual band, which is in front of the audio
+     * one in the list - so it moves the audio track's index. Everything below
+     * looks tracks up by kind rather than by the number they used to be. */
+    const int ti = sn::addTrack(p, sn::TRACK_TEXT);
+    int vi = -1, ai = -1;
+    for (size_t i = 0; i < p.tracks.size(); i++) {
+        if (p.tracks[i].kind == sn::TRACK_VIDEO && vi < 0) vi = (int)i;
+        if (p.tracks[i].kind == sn::TRACK_AUDIO && ai < 0) ai = (int)i;
+    }
+    CHECK(vi >= 0 && ai >= 0 && ti >= 0, "video, audio and text tracks to save");
+
+    p.tracks[ai].clips[0].gain = 0.5;
+    p.tracks[ai].gain = 0.75;
+    p.tracks[vi].clips[0].fadeOut = 0.4;
     p.name = "a test";
+
+    /* A caption, with something in every field that could be dropped. */
+    sn::Clip cap;
+    cap.id = p.newId();
+    cap.in = 0.0;
+    cap.out = 2.5;
+    cap.pos = 1.25;
+    cap.text.text = "two \\ lines\nand a backslash";
+    cap.text.size = 0.123;
+    cap.text.x = -0.4;
+    cap.text.y = 0.6;
+    cap.text.rotation = -7.5;
+    cap.text.fill = 0x11223344u;
+    cap.text.outline = 0x55667788u;
+    cap.text.outlineWidth = 0.075;
+    cap.text.align = 2;
+    cap.text.lineSpacing = 1.4;
+    sn::addClip(p, ti, cap);
 
     const std::string path = "media/test.bencsnip";
     CHECK(sn::saveProject(p, path, &err), "save: %s", err.c_str());
@@ -641,13 +744,36 @@ static void test_project()
     CHECK(q.bin.size() == p.bin.size(), "the bin came back");
     CHECK(q.tracks.size() == p.tracks.size(), "the tracks came back");
     CHECK(NEAR(q.duration(), p.duration(), 1e-6), "the duration is the same");
-    CHECK(q.tracks[0].clips.size() == p.tracks[0].clips.size(), "the cuts came back");
-    CHECK(NEAR(q.tracks[1].clips[0].gain, 0.5, 1e-4), "so did the gain");
-    CHECK(NEAR(q.tracks[1].gain, 0.75, 1e-4), "and the track's own level");
-    CHECK(NEAR(q.tracks[0].gain, 1.0, 1e-9),
-          "a track nobody touched comes back at unity, got %f", q.tracks[0].gain);
-    CHECK(NEAR(q.tracks[0].clips[0].fadeOut, 0.4, 1e-4), "and the fade");
+    CHECK(q.tracks[vi].clips.size() == p.tracks[vi].clips.size(), "the cuts came back");
+    CHECK(NEAR(q.tracks[ai].clips[0].gain, 0.5, 1e-4), "so did the gain");
+    CHECK(NEAR(q.tracks[ai].gain, 0.75, 1e-4), "and the track's own level");
+    CHECK(NEAR(q.tracks[vi].gain, 1.0, 1e-9),
+          "a track nobody touched comes back at unity, got %f", q.tracks[vi].gain);
+    CHECK(NEAR(q.tracks[vi].clips[0].fadeOut, 0.4, 1e-4), "and the fade");
     CHECK(!q.dirty, "a project just loaded is not dirty");
+
+    /* The caption, field by field. The string is the one that matters most:
+     * it is the only thing in this format that is escaped, and a newline or a
+     * backslash coming back wrong would be a project that silently changes
+     * what it says. */
+    CHECK(ti < (int)q.tracks.size() && q.tracks[ti].kind == sn::TRACK_TEXT,
+          "the text track came back as a text track");
+    if (ti < (int)q.tracks.size() && !q.tracks[ti].clips.empty()) {
+        const sn::TextStyle &g = q.tracks[ti].clips[0].text;
+        CHECK(g.text == cap.text.text, "the words came back: '%s'", g.text.c_str());
+        CHECK(g.text.find('\n') != std::string::npos, "with the line break in them");
+        CHECK(g.text.find('\\') != std::string::npos, "and the backslash");
+        CHECK(NEAR(g.size, 0.123, 1e-6), "the size");
+        CHECK(NEAR(g.x, -0.4, 1e-6) && NEAR(g.y, 0.6, 1e-6), "the position");
+        CHECK(NEAR(g.rotation, -7.5, 1e-6), "the rotation");
+        CHECK(g.fill == 0x11223344u && g.outline == 0x55667788u, "both colours");
+        CHECK(NEAR(g.outlineWidth, 0.075, 1e-6), "the outline width");
+        CHECK(g.align == 2, "the alignment");
+        CHECK(NEAR(g.lineSpacing, 1.4, 1e-6), "the line spacing");
+        CHECK(g == cap.text, "and nothing else drifted");
+    } else {
+        CHECK(false, "the caption did not come back at all");
+    }
 
     remove(path.c_str());
 }

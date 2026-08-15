@@ -4,6 +4,8 @@
 
 #include "sn_render.h"
 
+#include "sn_text.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -41,6 +43,7 @@ void Renderer::reset()
     m_open.clear();
     m_failed.clear();
     m_layers.clear();
+    m_text.clear();
 }
 
 Source *Renderer::source(int itemId)
@@ -122,10 +125,26 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
      * sn_timeline.h. */
     for (size_t ti = 0; ti < m_p->tracks.size(); ti++) {
         const Track &tr = m_p->tracks[ti];
-        if (tr.kind != TRACK_VIDEO || tr.muted) continue;
+        if (!visualTrack(tr.kind) || tr.muted) continue;
 
         const Clip *c = tr.at(t);
         if (!c) continue;
+
+        /* Text goes on in list order with everything else, which is what
+         * makes a caption something you can put behind one layer and in front
+         * of another rather than a thing that is always on top. */
+        if (tr.kind == TRACK_TEXT) {
+            const double g = fadeGain(*c, t);
+            if (g > 0.0 && !c->muted && !c->text.text.empty()) {
+                TextLayer &tl = m_text[tr.id];
+                if (!tl.matches(c->text, w, h)) buildTextLayer(c->text, w, h, &tl);
+                if (tl.valid()) {
+                    blitTextLayer(tl, c->text, m_canvas.data(), w, h, g);
+                    any = true;
+                }
+            }
+            continue;
+        }
 
         const BinItem *b = m_p->item(c->source);
         if (!b || !b->info.hasVideo) continue;

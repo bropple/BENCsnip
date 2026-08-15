@@ -114,6 +114,12 @@ static bool track_free(const Track &t, double a, double b, int ignoreId = 0)
     return true;
 }
 
+/* "V", "A", "T" - what a track of this kind is called before its number. */
+static std::string kind_prefix(TrackKind k)
+{
+    return k == TRACK_VIDEO ? "V" : k == TRACK_AUDIO ? "A" : "T";
+}
+
 int Project::freeTrack(TrackKind k, double a, double b)
 {
     for (size_t i = 0; i < tracks.size(); i++)
@@ -127,7 +133,7 @@ int Project::freeTrack(TrackKind k, double a, double b)
 
     int n = 0;
     for (const Track &x : tracks) if (x.kind == k) n++;
-    t.name = (k == TRACK_VIDEO ? "V" : "A") + std::to_string(n + 1);
+    t.name = kind_prefix(k) + std::to_string(n + 1);
 
     size_t insert = tracks.size();
     if (k == TRACK_VIDEO) {
@@ -144,16 +150,19 @@ int Project::freeTrack(TrackKind k, double a, double b)
 
 /* Video above audio, always. Given a wanted position, this is the nearest one
  * that does not put a video track under an audio one. */
+/* The run of the list this kind is allowed to sit in. Its band rather than
+ * its exact kind: a text track belongs among the video tracks, in front of
+ * some and behind others, which is the whole point of it being a track. */
 static int clamp_into_kind(const Project &p, TrackKind kind, int want)
 {
     int first = 0, last = 0;
     for (size_t i = 0; i < p.tracks.size(); i++) {
-        if (p.tracks[i].kind == kind) { first = (int)i; break; }
+        if (sameBand(p.tracks[i].kind, kind)) { first = (int)i; break; }
         first = (int)i + 1;
     }
     last = first;
-    for (size_t i = first; i < p.tracks.size(); i++) {
-        if (p.tracks[i].kind != kind) break;
+    for (size_t i = (size_t)first; i < p.tracks.size(); i++) {
+        if (!sameBand(p.tracks[i].kind, kind)) break;
         last = (int)i + 1;
     }
 
@@ -173,14 +182,18 @@ int addTrack(Project &p, TrackKind kind, int atIndex)
     int n = 0;
     for (const Track &x : p.tracks)
         if (x.kind == kind) n++;
-    t.name = (kind == TRACK_VIDEO ? "V" : "A") + std::to_string(n + 1);
+    t.name = kind_prefix(kind) + std::to_string(n + 1);
 
     int at = atIndex;
     if (at < 0) {
         /* A new video track goes at the top, which is the back of the
          * picture: whatever is already there stays in front of it, which is
          * what you want when you are adding a background. A new audio track
-         * goes at the bottom, where there is nothing to be in front of. */
+         * goes at the bottom, where there is nothing to be in front of.
+         *
+         * A new text track goes at the front of the picture, which is the
+         * bottom of the visual band, because a caption nobody can see is not
+         * what anybody meant by adding one. */
         at = kind == TRACK_VIDEO ? 0 : (int)p.tracks.size();
     }
     at = clamp_into_kind(p, kind, at);
@@ -195,11 +208,16 @@ bool removeTrack(Project &p, int idx)
     const Track *t = p.track(idx);
     if (!t) return false;
 
-    /* Something has to be left to drop a file onto. */
-    int n = 0;
-    for (const Track &x : p.tracks)
-        if (x.kind == t->kind) n++;
-    if (n < 2) return false;
+    /* Something has to be left to drop a file onto - but only for the kinds
+     * a file can be dropped onto. A project with no text track at all is an
+     * ordinary project, and the last one has to be removable or adding a
+     * caption is a decision nobody can take back. */
+    if (t->kind != TRACK_TEXT) {
+        int n = 0;
+        for (const Track &x : p.tracks)
+            if (x.kind == t->kind) n++;
+        if (n < 2) return false;
+    }
 
     p.tracks.erase(p.tracks.begin() + idx);
     p.dirty = true;
@@ -212,9 +230,11 @@ int moveTrack(Project &p, int idx, int delta)
 
     const int to = idx + (delta > 0 ? 1 : -1);
     if (to < 0 || to >= (int)p.tracks.size()) return idx;
-    /* Only past its own kind: swapping a video track with an audio one would
-     * shuffle the two halves of the list together. */
-    if (p.tracks[to].kind != p.tracks[idx].kind) return idx;
+    /* Only within its own band: swapping a video track with an audio one would
+     * shuffle the two halves of the list together. A text track and a video
+     * track are the same band and do swap, because which of them is in front
+     * is exactly what somebody reordering them is deciding. */
+    if (!sameBand(p.tracks[to].kind, p.tracks[idx].kind)) return idx;
 
     std::swap(p.tracks[idx], p.tracks[to]);
     p.dirty = true;

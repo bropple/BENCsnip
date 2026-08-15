@@ -75,6 +75,18 @@ private:
      * previous track's picture in it. The cost is a canvas-sized buffer per
      * video track, which at a preview size is a few megabytes each. */
     std::map<int, VideoFrame> m_layers;
+
+    /* One rasterised caption per text track, kept for the same reason and at
+     * greater expense: building one lays out the glyphs and grows the outline
+     * out of them, and a caption changes about twice an hour while the frame
+     * it is drawn on changes thirty times a second.
+     *
+     * Keyed by track rather than by clip, because a track's clips do not
+     * overlap - only one caption on it can be under the playhead - so this is
+     * bounded by the number of text tracks rather than by the number of
+     * captions in the project. Crossing the cut between two captions on one
+     * track rebuilds, which is a rebuild that was going to happen anyway. */
+    std::map<int, TextLayer> m_text;
 };
 
 /* The multiplier a clip's fades put on it at timeline time t: 1 in the middle,
