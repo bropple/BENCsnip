@@ -349,6 +349,285 @@ void previewPane(App &a, Rectangle r)
                              c.height * sc};
         };
 
+        const bool overView = CheckCollisionPointRec(m, view) && !sn_ui_blocked(&a.ui);
+
+        /* --- captions ------------------------------------------------
+         *
+         * A caption is placed per clip rather than per track, so this cannot
+         * reuse the layer handles above: what is being moved is one clip's
+         * style, and two captions on one track are two different positions.
+         * It is also rotatable, which nothing else on this canvas is, so the
+         * box is four corners rather than a rectangle and every hit test here
+         * is against a quad.
+         *
+         * It runs before the layer code so that a caption in front of a video
+         * layer is what a click on it picks. Pressing on one sets a.drag
+         * immediately - even for a click that only selects - which is what
+         * stops the layer code below from also grabbing the picture
+         * underneath, and is what that code does for its own layers.
+         *
+         * The geometry comes from textBox() in the core, which is the same
+         * measurement the renderer fills. Working it out again here would be
+         * two answers to one question, and the one the mouse got would be the
+         * wrong one.
+         * ------------------------------------------------------------------ */
+        {
+            const int CW = a.proj.width, CH = a.proj.height;
+
+            auto capQuad = [&](const TextStyle &st, Vector2 out[4]) {
+                double k[8];
+                if (!textBox(st, CW, CH, k)) return false;
+                for (int i = 0; i < 4; i++)
+                    out[i] = Vector2{dst.x + (float)k[i * 2] * sc,
+                                     dst.y + (float)k[i * 2 + 1] * sc};
+                return true;
+            };
+
+            auto centreOf = [](const Vector2 q[4]) {
+                return Vector2{(q[0].x + q[1].x + q[2].x + q[3].x) * 0.25f,
+                               (q[0].y + q[1].y + q[2].y + q[3].y) * 0.25f};
+            };
+
+            /* Inside a convex quad is on the same side of all four edges. */
+            auto inQuad = [](Vector2 p, const Vector2 q[4]) {
+                int pos = 0, neg = 0;
+                for (int i = 0; i < 4; i++) {
+                    const Vector2 &u = q[i], &v = q[(i + 1) & 3];
+                    const float d =
+                        (p.x - u.x) * (v.y - u.y) - (p.y - u.y) * (v.x - u.x);
+                    if (d > 0.0f) pos++;
+                    else if (d < 0.0f) neg++;
+                }
+                return pos == 0 || neg == 0;
+            };
+
+            /* What is selected, taken from the timeline's selection so that
+             * the two panes cannot hold different ideas of it. Only a caption
+             * the playhead is actually inside gets handles: drawing them
+             * around something not on screen would be furniture over a frame
+             * it has nothing to do with. */
+            Clip *cap = nullptr;
+            for (const ClipRef &r0 : a.sel) {
+                const Track *t0 = a.proj.track(r0.track);
+                if (!t0 || t0->kind != TRACK_TEXT || t0->locked) continue;
+                Clip *c0 = a.proj.clip(r0);
+                if (!c0 || !c0->covers(a.playhead)) continue;
+                cap = c0;
+                a.textClip = r0;
+                break;
+            }
+
+            /* Front to back, so a click picks what can be seen. */
+            ClipRef capHit;
+            for (int i = (int)a.proj.tracks.size() - 1; i >= 0 && !capHit.ok(); i--) {
+                const Track &t0 = a.proj.tracks[i];
+                if (t0.kind != TRACK_TEXT || t0.muted || t0.locked) continue;
+                const Clip *c0 = t0.at(a.playhead);
+                if (!c0 || c0->text.text.empty()) continue;
+
+                Vector2 q[4];
+                if (capQuad(c0->text, q) && inQuad(m, q))
+                    capHit = ClipRef{i, c0->id};
+            }
+
+            /* --- the handles --- */
+            Vector2 q[4] = {};
+            Vector2 rot = {0, 0};
+            bool haveBox = false;
+
+            if (cap && capQuad(cap->text, q)) {
+                haveBox = true;
+
+                /* The turn handle stands off the top edge along the box's own
+                 * up direction, so it follows the caption round rather than
+                 * staying north of it and crossing the box at 180 degrees. */
+                const Vector2 topMid = {(q[0].x + q[1].x) * 0.5f, (q[0].y + q[1].y) * 0.5f};
+                const Vector2 botMid = {(q[2].x + q[3].x) * 0.5f, (q[2].y + q[3].y) * 0.5f};
+                float ux = topMid.x - botMid.x, uy = topMid.y - botMid.y;
+                const float ul = std::sqrt(ux * ux + uy * uy);
+                if (ul > 0.001f) { ux /= ul; uy /= ul; }
+                rot = Vector2{topMid.x + ux * 22.0f, topMid.y + uy * 22.0f};
+
+                for (int i = 0; i < 4; i++)
+                    DrawLineEx(q[i], q[(i + 1) & 3], 1.0f, SN_ACCENT);
+                DrawLineEx(topMid, rot, 1.0f, SN_ACCENT);
+
+                const float k = 4.5f;
+                for (int i = 0; i < 4; i++) {
+                    DrawRectangleRec(Rectangle{q[i].x - k, q[i].y - k, k * 2, k * 2}, SN_BG);
+                    DrawRectangleLinesEx(Rectangle{q[i].x - k, q[i].y - k, k * 2, k * 2}, 1,
+                                         SN_ACCENT);
+                }
+                DrawCircleV(rot, 4.5f, SN_BG);
+                DrawCircleLinesV(rot, 4.5f, SN_ACCENT);
+            }
+
+            auto near = [](Vector2 p, Vector2 t, float r) {
+                return std::fabs(p.x - t.x) <= r && std::fabs(p.y - t.y) <= r;
+            };
+
+            /* --- starting --- */
+            if (overView && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                a.drag == DRAG_NONE) {
+                int corner = -1;
+                bool onRot = false;
+                if (haveBox) {
+                    for (int i = 0; i < 4; i++)
+                        if (near(m, q[i], 7.0f)) corner = i;
+                    onRot = corner < 0 && near(m, rot, 8.0f);
+                }
+
+                if (haveBox && (corner >= 0 || onRot)) {
+                    a.drag = onRot ? DRAG_TEXT_ROT : DRAG_TEXT_SIZE;
+                    a.textHandle = corner;
+                    a.textGrab = cap->text;
+                    a.layerFrom = m;
+                    a.dragMoved = false;
+
+                    const Vector2 ctr = centreOf(q);
+                    a.textRotGrab = std::atan2(m.y - ctr.y, m.x - ctr.x);
+                } else if (capHit.ok()) {
+                    a.sel.clear();
+                    a.sel.push_back(capHit);
+                    a.textClip = capHit;
+                    a.layoutTrack = -1;         /* one thing selected at a time */
+
+                    cap = a.proj.clip(capHit);
+                    if (cap) {
+                        a.drag = DRAG_TEXT;
+                        a.textHandle = -1;
+                        a.textGrab = cap->text;
+                        a.layerFrom = m;
+                        a.dragMoved = false;
+                    }
+                }
+            }
+
+            /* --- carrying on --- */
+            if (a.drag == DRAG_TEXT || a.drag == DRAG_TEXT_SIZE ||
+                a.drag == DRAG_TEXT_ROT) {
+                Clip *c1 = a.proj.clip(a.textClip);
+
+                if (!c1) {
+                    a.drag = DRAG_NONE;
+                } else {
+                    if (!a.dragMoved && std::fabs(m.x - a.layerFrom.x) +
+                                                std::fabs(m.y - a.layerFrom.y) >= 2.0f)
+                        a.dragMoved = true;
+
+                    if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+                        if (a.dragMoved) a.changed();
+                        a.drag = DRAG_NONE;
+                        a.textHandle = -1;
+                    } else if (a.dragMoved) {
+                        /* Every frame works from the style as it was when the
+                         * drag began, not from the style as it is now. Reading
+                         * back what the last frame wrote accumulates its own
+                         * rounding, and a caption dragged slowly across the
+                         * canvas arrives somewhere the pointer is not. */
+                        Vector2 g[4];
+                        if (capQuad(a.textGrab, g)) {
+                            const Vector2 ctr = centreOf(g);
+                            const double lw = std::hypot(g[1].x - g[0].x, g[1].y - g[0].y) / sc;
+                            const double lh = std::hypot(g[2].x - g[1].x, g[2].y - g[1].y) / sc;
+
+                            TextStyle st = a.textGrab;
+
+                            if (a.drag == DRAG_TEXT) {
+                                /* The centre moves with the pointer, and then
+                                 * becomes x and y again: fractions of the space
+                                 * left over, which is what makes -1 mean "hard
+                                 * against that edge" at any size. */
+                                const double ncx =
+                                    (ctr.x - dst.x) / sc + (m.x - a.layerFrom.x) / sc;
+                                const double ncy =
+                                    (ctr.y - dst.y) / sc + (m.y - a.layerFrom.y) / sc;
+
+                                const double freeW = CW - lw, freeH = CH - lh;
+                                st.x = std::fabs(freeW) < 1.0
+                                           ? 0.0
+                                           : (ncx - lw * 0.5) / (freeW * 0.5) - 1.0;
+                                st.y = std::fabs(freeH) < 1.0
+                                           ? 0.0
+                                           : (ncy - lh * 0.5) / (freeH * 0.5) - 1.0;
+                                st.x = std::max(-4.0, std::min(4.0, st.x));
+                                st.y = std::max(-4.0, std::min(4.0, st.y));
+                            } else if (a.drag == DRAG_TEXT_SIZE) {
+                                /* How much further from the centre the pointer
+                                 * is than the corner it grabbed. Distance
+                                 * rather than an axis, because the box may be
+                                 * turned and "wider" then has no screen
+                                 * direction to mean. */
+                                const int h = a.textHandle >= 0 ? a.textHandle : 0;
+                                const double was = std::hypot(g[h].x - ctr.x, g[h].y - ctr.y);
+                                const double now = std::hypot(m.x - ctr.x, m.y - ctr.y);
+                                if (was > 1.0) {
+                                    double f = now / was;
+                                    f = std::max(0.05, std::min(20.0, f));
+                                    st.size = std::max(0.005, std::min(2.0,
+                                                                       a.textGrab.size * f));
+                                }
+                            } else {
+                                double d = (std::atan2(m.y - ctr.y, m.x - ctr.x) -
+                                            a.textRotGrab) *
+                                           180.0 / 3.14159265358979323846;
+                                double r1 = a.textGrab.rotation + d;
+
+                                /* Shift steps by fifteen degrees; without it,
+                                 * upright is sticky, because level is what
+                                 * almost every caption wants and a mouse
+                                 * cannot land on zero. */
+                                const bool shiftDown = IsKeyDown(KEY_LEFT_SHIFT) ||
+                                                       IsKeyDown(KEY_RIGHT_SHIFT);
+                                if (shiftDown) r1 = std::round(r1 / 15.0) * 15.0;
+                                else if (std::fabs(r1) < 2.0) r1 = 0.0;
+
+                                while (r1 > 180.0) r1 -= 360.0;
+                                while (r1 < -180.0) r1 += 360.0;
+                                st.rotation = r1;
+                            }
+
+                            if (st != c1->text) {
+                                c1->text = st;
+                                a.changed(true);
+                            }
+                        }
+                    }
+                }
+            }
+
+            /* --- what the pointer says it will do --- */
+            if (overView && a.drag == DRAG_NONE) {
+                bool said = false;
+                if (haveBox) {
+                    for (int i = 0; i < 4; i++)
+                        if (near(m, q[i], 7.0f)) {
+                            sn_cursor(&a.ui, i == 0 || i == 2 ? MOUSE_CURSOR_RESIZE_NWSE
+                                                              : MOUSE_CURSOR_RESIZE_NESW);
+                            sn_tip(&a.ui, "drag to resize the caption");
+                            said = true;
+                        }
+                    if (!said && near(m, rot, 8.0f)) {
+                        sn_cursor(&a.ui, MOUSE_CURSOR_POINTING_HAND);
+                        sn_tip(&a.ui, "drag to turn it - Shift steps by fifteen degrees");
+                        said = true;
+                    }
+                }
+                if (!said && capHit.ok()) {
+                    sn_cursor(&a.ui, MOUSE_CURSOR_RESIZE_ALL);
+                    sn_tip(&a.ui, "drag the caption about. Double-click for the words");
+                    said = true;
+                }
+            }
+
+            /* Double-click opens the window with the words in it. */
+            if (overView && capHit.ok() && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                sn_double_click(&a.ui, 5300 + capHit.track)) {
+                a.textClip = capHit;
+                a.modal = MODAL_TEXT;
+            }
+        }
+
         /* Front to back, so a click picks what a person can actually see:
          * the list is stored back-first.
          *
@@ -364,7 +643,6 @@ void previewPane(App &a, Rectangle r)
             if (CheckCollisionPointRec(m, toScreen(layerRect(t)))) hit = i;
         }
 
-        const bool overView = CheckCollisionPointRec(m, view) && !sn_ui_blocked(&a.ui);
         Track *sel = a.proj.track(a.layoutTrack);
         if (sel && (sel->kind != TRACK_VIDEO || sel->locked)) sel = nullptr;
 
@@ -720,6 +998,52 @@ static void cmd_select_all(App &a)
     a.say("selected %d clips", (int)a.sel.size());
 }
 
+/* Put a caption on the timeline at the playhead, and open the window that
+ * says what it reads.
+ *
+ * It goes on the frontmost text track if there is one, and on a new one if
+ * there is not. Not always a new one: somebody adding a second caption to a
+ * sequence means the next caption, not a second layer of them, and a stack of
+ * one-clip tracks is a timeline nobody can read. Putting it in front is the
+ * same argument addTrack makes about where a new text track goes.
+ *
+ * Five seconds because a caption is read rather than watched, and because a
+ * length that has to be trimmed is friendlier than one that has to be found. */
+static void cmd_add_text(App &a)
+{
+    int track = -1;
+    for (size_t i = 0; i < a.proj.tracks.size(); i++)
+        if (a.proj.tracks[i].kind == TRACK_TEXT) track = (int)i;
+
+    if (track < 0) {
+        track = addTrack(a.proj, TRACK_TEXT);
+        if (track < 0) return;
+    }
+
+    Clip c;
+    c.id = a.proj.newId();
+    c.source = 0;
+    c.in = 0.0;
+    c.out = 5.0;
+    c.pos = std::max(0.0, a.playhead);
+    c.text.text = "Text";
+    c.text.size = 0.12;
+    c.text.y = 0.6;                       /* low, where a caption belongs */
+    c.text.fill = 0xffffffffu;
+    c.text.outline = 0x000000ffu;
+    c.text.outlineWidth = 0.08;
+
+    const Clip *put = addClip(a.proj, track, c);
+    if (!put) return;
+
+    a.sel.clear();
+    a.sel.push_back(ClipRef{track, put->id});
+    a.textClip = a.sel[0];
+    a.changed();
+    a.modal = MODAL_TEXT;
+    a.say("caption added at %s", fmtTime(c.pos).c_str());
+}
+
 /* ------------------------------------------------------------------ *
  * The menu bar
  *
@@ -748,6 +1072,7 @@ static void appmenu(App &a)
 
         case SN_CMD_UNDO:          cmd_undo(a); break;
         case SN_CMD_REDO:          cmd_redo(a); break;
+        case SN_CMD_ADD_TEXT:      cmd_add_text(a); break;
         case SN_CMD_SPLIT:         doSplit(a); break;
         case SN_CMD_DELETE:        doDelete(a, false); break;
         case SN_CMD_RIPPLE_DELETE: doDelete(a, true); break;
@@ -812,6 +1137,11 @@ static void toolbar(App &a, Rectangle r)
     if (sn_icon_button(&ui, 16, Rectangle{x, y, bw, bh}, SN_I_TRASH, !a.sel.empty(), 0,
                        "delete the selected clip (Del, or Shift+Del to close the gap)")) {
         doDelete(a, false);
+    }
+    x += bw + 4;
+    if (sn_icon_button(&ui, 25, Rectangle{x, y, bw, bh}, SN_I_TEXT, 1, 0,
+                       "put a caption on the picture at the playhead (Ctrl+T)")) {
+        cmd_add_text(a);
     }
     x += bw + 4;
     gap();
@@ -941,6 +1271,7 @@ static void keys(App &a)
         if (IsKeyPressed(KEY_E)) cmd_export(a);
         if (IsKeyPressed(KEY_N)) cmd_new(a);
         if (IsKeyPressed(KEY_A)) cmd_select_all(a);
+        if (IsKeyPressed(KEY_T)) cmd_add_text(a);
         return;
     }
 
@@ -1518,6 +1849,7 @@ static int run(int argc, char **argv)
         switch (a.modal) {
         case MODAL_EXPORT: exportDialog(a); break;
         case MODAL_LAYOUT: layoutDialog(a); break;
+        case MODAL_TEXT:   textDialog(a); break;
         case MODAL_CANVAS: canvasDialog(a); break;
         case MODAL_INFO: infoWindow(a); break;
         case MODAL_CONFIRM: confirmDialog(a); break;

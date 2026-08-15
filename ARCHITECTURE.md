@@ -74,6 +74,14 @@ same meaning as the clip's, so the two numbers read alike, and per track for
 the reason a mixer has faders — pulling a whole track down should not mean
 undoing what was set clip by clip.
 
+Text is a clip too. A caption is a `Clip` on a `TRACK_TEXT` track with `source`
+of 0 and a `TextStyle` on it — the words, the face, the size, where it sits,
+how far it is turned, two colours — so it trims, slides, splits, fades, links
+and mutes because clips already do all of that. Video and text are one *band*:
+the list has always meant two things at once, and a caption has to be able to
+sit in front of one video track and behind another, so what used to be "same
+kind" for ordering is now `sameBand`, and video and text swap freely inside it.
+
 The order of the video tracks is the compositing order, and **the top row is
 the back**. That is the opposite of the convention every other editor uses; it
 is what this one was asked for, and the only defence against the surprise is
@@ -140,6 +148,12 @@ would never produce. Audio sums every unmuted audio clip
 under the block, with fades evaluated per sample — a fade shorter than a block
 would otherwise be a step, and a step in a gain is a click — then clips to
 ±1.0, so an overloaded mix sounds overloaded rather than broken.
+
+Text is composited in the same list order as the pictures, from a cache of
+rasterised captions kept per text track — a track's clips do not overlap, so
+only one caption on it can be under the playhead. Building one lays out the
+glyphs and grows the outline out of them by dilation, which is expensive and
+runs when the caption changes rather than when the frame does.
 
 A Renderer owns its open files and is not thread-safe. The player thread has
 one and the exporter has its own; a decoder is a read position, and two threads

@@ -38,6 +38,7 @@ enum SnCmd {
 
     SN_CMD_UNDO,
     SN_CMD_REDO,
+    SN_CMD_ADD_TEXT,
     SN_CMD_SPLIT,
     SN_CMD_DELETE,
     SN_CMD_RIPPLE_DELETE,

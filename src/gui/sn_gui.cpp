@@ -34,6 +34,13 @@ Color SN_CLIP_V_EDGE = {0x25, 0x4d, 0x75, 255};
 Color SN_CLIP_A = {0x4a, 0x73, 0x2c, 255};
 Color SN_CLIP_A_HI = {0x78, 0xb9, 0x46, 255};
 Color SN_CLIP_A_EDGE = {0x3f, 0x5c, 0x28, 255};
+/* Captions. A third hue rather than a shade of one of the other two, because
+ * what a text clip is has to be readable at a glance across a timeline, and
+ * amber is the one colour in this theme not already spoken for by video or
+ * audio. */
+Color SN_CLIP_T = {0x8c, 0x5c, 0x22, 255};
+Color SN_CLIP_T_HI = {0xbf, 0x86, 0x35, 255};
+Color SN_CLIP_T_EDGE = {0x75, 0x4b, 0x1c, 255};
 
 /* ------------------------------------------------------------------ *
  * Fonts
@@ -500,6 +507,14 @@ void sn_draw_icon(sn_icon which, Rectangle r, Color c)
         DrawRing(Vector2{cx, cy}, 0.5f * s - th * 0.5f, 0.5f * s + th * 0.5f, 20, 320,
                  28, c);
         tri(V(0.28f, -0.72f), V(0.92f, -0.52f), V(0.42f, -0.06f));
+        break;
+    case SN_I_TEXT:
+        /* A serifed capital T: the crossbar, the stem, and a foot. Plain
+         * enough at 26 pixels to read as a letter rather than as a shape, and
+         * the serifs are what stop it reading as a plus sign. */
+        bar(-0.75f, -0.7f, 1.5f, 0.22f);
+        bar(-0.11f, -0.7f, 0.22f, 1.4f);
+        bar(-0.42f, 0.48f, 0.84f, 0.22f);
         break;
     case SN_I_CROP:
         /* Two overlapping corners, which is what a crop tool has looked like

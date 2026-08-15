@@ -552,6 +552,301 @@ void exportDialogPrepare(App &a)
  * this track's rectangle in it. Four numbers and a preview beats four numbers.
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * The caption window
+ *
+ * What a caption says and how it looks. Where it sits, how big it is and how
+ * far it is turned are here too, but the preview is the better place to set
+ * those - dragging the thing itself beats typing a number at it - so this
+ * says so and keeps the numbers for when a number is what you actually want.
+ *
+ * The preview pane is still on screen behind this, dimmed rather than hidden,
+ * and every control marks the change minor, so the caption behind the window
+ * updates as it is edited. That is the whole reason there is no second little
+ * preview drawn inside the dialog: there is already a real one, at the real
+ * size, showing the real frame.
+ * ------------------------------------------------------------------ */
+
+namespace {
+
+/* The words, split into the lines the dialog edits and joined back up.
+ *
+ * Three single-line fields rather than one that takes newlines. sn_field is a
+ * one-line field with a caret and a selection in it, and teaching it to wrap
+ * is a bigger piece of work than captions justify - almost none run past
+ * three lines, and the ones that do are a title card somebody should be
+ * setting in something else. The renderer and the project file take any
+ * number; this is the editor being modest, not the model.
+ */
+void split_lines(const std::string &text, std::string out[3])
+{
+    int n = 0;
+    std::string cur;
+    for (char ch : text) {
+        if (ch == '\n') {
+            if (n < 3) out[n++] = cur;
+            cur.clear();
+            if (n >= 3) return;
+        } else {
+            cur += ch;
+        }
+    }
+    if (n < 3) out[n] = cur;
+}
+
+std::string join_lines(const std::string in[3])
+{
+    /* Trailing empties are dropped, so clearing the second line does not
+     * leave a caption with a blank row under it that nothing on screen
+     * explains. An empty line between two full ones is kept, because that one
+     * was asked for. */
+    int last = -1;
+    for (int i = 0; i < 3; i++)
+        if (!in[i].empty()) last = i;
+
+    std::string out;
+    for (int i = 0; i <= last; i++) {
+        if (i) out += '\n';
+        out += in[i];
+    }
+    return out;
+}
+
+/* One colour as four small sliders on a line, the way the crop row does it,
+ * with the result beside them. Four sliders rather than a colour wheel
+ * because a wheel is a widget this program does not have and these are the
+ * numbers underneath one anyway. */
+bool colour_row(App &a, int id, const char *name, Rgba *c, float x, float y, float w)
+{
+    sn_ui &ui = a.ui;
+    label(a, name, x, y);
+
+    int part[4] = {(int)((*c >> 24) & 0xff), (int)((*c >> 16) & 0xff),
+                   (int)((*c >> 8) & 0xff), (int)(*c & 0xff)};
+    static const char *tag[4] = {"R", "G", "B", "A"};
+
+    bool changed = false;
+    const float sw = (w - 30) / 4.0f;
+
+    for (int i = 0; i < 4; i++) {
+        Rectangle sl = {x + 114 + i * sw, y - 4, sw - 12, 16};
+        float v = part[i] / 255.0f;
+        if (sn_slider(&ui, id + i, sl, &v)) {
+            part[i] = (int)(v * 255.0f + 0.5f);
+            changed = true;
+        }
+        char num[16];
+        snprintf(num, sizeof num, "%s %d", tag[i], part[i]);
+        sn_text(&ui, SN_F_TINY, num, sl.x, y + 12, SN_EDGE);
+    }
+
+    if (changed)
+        *c = ((Rgba)part[0] << 24) | ((Rgba)part[1] << 16) | ((Rgba)part[2] << 8) |
+             (Rgba)part[3];
+
+    /* The swatch, over a chequer so that an alpha of nothing looks like
+     * nothing rather than like black. */
+    Rectangle sw2 = {x + 78, y - 5, 26, 18};
+    for (int gy = 0; gy < 2; gy++)
+        for (int gx = 0; gx < 3; gx++)
+            DrawRectangle((int)sw2.x + gx * 9, (int)sw2.y + gy * 9, 9, 9,
+                          (gx + gy) % 2 ? SN_EDGE : SN_BG);
+    DrawRectangleRec(sw2, Color{(unsigned char)part[0], (unsigned char)part[1],
+                                (unsigned char)part[2], (unsigned char)part[3]});
+    DrawRectangleLinesEx(sw2, 1, SN_BORDER);
+
+    return changed;
+}
+
+/* The font list, filtered. Kept between frames because it is the dialog's
+ * own state and not the project's - closing the window forgets it, which is
+ * what you want from a search box. */
+std::string g_fontFilter;
+float g_fontScroll = 0;
+
+} /* namespace */
+
+void textDialog(App &a)
+{
+    sn_ui &ui = a.ui;
+
+    Clip *c = a.proj.clip(a.textClip);
+    const Track *tr = a.proj.track(a.textClip.track);
+    if (!c || !tr || tr->kind != TRACK_TEXT) { a.modal = MODAL_NONE; return; }
+
+    TextStyle &st = c->text;
+
+    Rectangle r = modal_frame(a, "CAPTION", 620, 590);
+
+    sn_text(&ui, SN_F_TINY,
+            "drag it about on the preview behind this, or use its handles to resize "
+            "and turn it.",
+            r.x + 16, r.y + 38, SN_DIM);
+
+    float y = r.y + 62;
+
+    /* --- the words --- */
+    {
+        std::string line[3];
+        split_lines(st.text, line);
+
+        label(a, "WORDS", r.x + 16, y + 4);
+        bool edited = false;
+        for (int i = 0; i < 3; i++) {
+            Rectangle f = {r.x + 114, y + i * 26.0f, 480, 22};
+            if (sn_field(&ui, 8800 + i, f, line[i], i == 0 ? "the caption" : ""))
+                edited = true;
+        }
+        if (edited) {
+            st.text = join_lines(line);
+            a.changed(true);
+        }
+        y += 26 * 3 + 12;
+    }
+
+    /* --- the face --- */
+    {
+        label(a, "FONT", r.x + 16, y + 4);
+
+        const std::vector<FontEntry> &fonts = systemFonts();
+
+        std::string shown = st.font.empty() ? std::string("the one in the program")
+                                            : std::string();
+        if (shown.empty()) {
+            for (const FontEntry &f : fonts)
+                if (f.path == st.font) { shown = f.name; break; }
+            if (shown.empty()) shown = st.font;    /* a path nothing here lists */
+        }
+
+        Color nameCol = SN_TEXT;
+        if (textMissingFont(st)) {
+            nameCol = SN_AMBER;
+            shown += "  - not on this machine, using the program's";
+        }
+        sn_text_clip(&ui, SN_F_SMALL, shown.c_str(), r.x + 114, y, 380, nameCol);
+
+        Rectangle emb = {r.x + 506, y - 4, 88, 22};
+        if (sn_button(&ui, 8810, emb, "BUILT IN", !st.font.empty())) {
+            st.font.clear();
+            a.changed();
+        }
+        y += 26;
+
+        Rectangle filter = {r.x + 114, y, 480, 22};
+        sn_field(&ui, 8811, filter, g_fontFilter, "type to find a font");
+        y += 28;
+
+        /* The matches. Six rows: enough to choose from, small enough to leave
+         * the colours on the same screen. */
+        std::vector<const FontEntry *> hit;
+        for (const FontEntry &f : fonts) {
+            if (g_fontFilter.empty()) { hit.push_back(&f); continue; }
+            std::string hay = f.name, ned = g_fontFilter;
+            for (char &ch : hay) ch = (char)tolower((unsigned char)ch);
+            for (char &ch : ned) ch = (char)tolower((unsigned char)ch);
+            if (hay.find(ned) != std::string::npos) hit.push_back(&f);
+        }
+
+        const int rows = 6;
+        Rectangle list = {r.x + 114, y, 480, rows * 20.0f};
+        DrawRectangleRec(list, SN_WELL);
+        DrawRectangleLinesEx(list, 1, SN_BORDER);
+
+        const int maxTop = std::max(0, (int)hit.size() - rows);
+        if (CheckCollisionPointRec(GetMousePosition(), list) && !sn_ui_blocked(&ui))
+            g_fontScroll -= GetMouseWheelMove() * 2.0f;
+        g_fontScroll = std::max(0.0f, std::min((float)maxTop, g_fontScroll));
+
+        const int top = (int)g_fontScroll;
+        for (int i = 0; i < rows && top + i < (int)hit.size(); i++) {
+            const FontEntry *f = hit[(size_t)(top + i)];
+            Rectangle row = {list.x + 1, list.y + 1 + i * 20.0f, list.width - 2, 19};
+            const bool over = CheckCollisionPointRec(GetMousePosition(), row) &&
+                              !sn_ui_blocked(&ui);
+            const bool mine = f->path == st.font;
+
+            if (mine) DrawRectangleRec(row, Color{0x2d, 0x5c, 0x8c, 140});
+            else if (over) DrawRectangleRec(row, SN_PANEL);
+
+            sn_text_clip(&ui, SN_F_TINY, f->name.c_str(), row.x + 6, row.y + 4,
+                         row.width - 12, mine ? SN_TEXT : SN_DIM);
+
+            if (over && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                st.font = f->path;
+                a.changed();
+            }
+        }
+        if (hit.empty())
+            sn_text(&ui, SN_F_TINY, "nothing on this machine matches", list.x + 6,
+                    list.y + 6, SN_EDGE);
+
+        {
+            char n[64];
+            snprintf(n, sizeof n, "%d of %d", (int)hit.size(), (int)fonts.size());
+            sn_text(&ui, SN_F_TINY, n, r.x + 16, list.y + 4, SN_EDGE);
+        }
+        y += list.height + 14;
+    }
+
+    /* --- size, turn, spacing --- */
+    struct Num {
+        const char *name;
+        double *v, lo, hi;
+        const char *fmt;
+    } nums[] = {
+        {"SIZE", &st.size, 0.01, 0.60, "%.3f of the height"},
+        {"TURN", &st.rotation, -180.0, 180.0, "%.1f degrees"},
+        {"OUTLINE", &st.outlineWidth, 0.0, 0.35, "%.3f of the size"},
+        {"LINE GAP", &st.lineSpacing, 0.8, 2.5, "%.2f x the line"},
+    };
+    for (int i = 0; i < 4; i++) {
+        label(a, nums[i].name, r.x + 16, y);
+        Rectangle sl = {r.x + 114, y - 4, 340, 16};
+        float v = (float)((*nums[i].v - nums[i].lo) / (nums[i].hi - nums[i].lo));
+        if (sn_slider(&ui, 8820 + i, sl, &v)) {
+            *nums[i].v = nums[i].lo + v * (nums[i].hi - nums[i].lo);
+            /* Upright is sticky, the same way it is on the preview's turn
+             * handle: level is what nearly every caption wants. */
+            if (i == 1 && std::fabs(*nums[i].v) < 2.0) *nums[i].v = 0.0;
+            a.changed(true);
+        }
+        char num[64];
+        snprintf(num, sizeof num, nums[i].fmt, *nums[i].v);
+        sn_text(&ui, SN_F_TINY, num, sl.x + sl.width + 12, y - 2, SN_EDGE);
+        y += 26;
+    }
+    y += 6;
+
+    /* --- alignment, which only shows with more than one line --- */
+    {
+        label(a, "ALIGN", r.x + 16, y);
+        static const char *names[3] = {"LEFT", "CENTRE", "RIGHT"};
+        for (int i = 0; i < 3; i++) {
+            Rectangle b = {r.x + 114 + i * 96.0f, y - 6, 90, 22};
+            if (sn_toggle(&ui, 8830 + i, b, names[i], st.align == i)) {
+                st.align = i;
+                a.changed();
+            }
+        }
+        if (st.text.find('\n') == std::string::npos)
+            sn_text(&ui, SN_F_TINY, "only matters with more than one line",
+                    r.x + 410, y - 2, SN_EDGE);
+        y += 30;
+    }
+
+    /* --- the two colours --- */
+    if (colour_row(a, 8840, "FILL", &st.fill, r.x + 16, y, 580)) a.changed(true);
+    y += 30;
+    if (colour_row(a, 8850, "OUTLINE", &st.outline, r.x + 16, y, 580)) a.changed(true);
+    y += 30;
+
+    Rectangle close = {r.x + r.width - 104, r.y + r.height - 40, 88, 26};
+    if (sn_button_lit(&ui, 8860, close, "DONE", 1) || IsKeyPressed(KEY_ESCAPE)) {
+        a.changed();
+        a.modal = MODAL_NONE;
+    }
+}
+
 void layoutDialog(App &a)
 {
     sn_ui &ui = a.ui;

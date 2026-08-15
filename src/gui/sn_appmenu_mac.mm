@@ -172,6 +172,8 @@ void sn_appmenu_install(void)
         add_item(edit, @"Redo", SN_CMD_REDO, @"z",
                  NSEventModifierFlagCommand | NSEventModifierFlagShift);
         [edit addItem:[NSMenuItem separatorItem]];
+        add_cmd_item(edit, @"Add Caption", SN_CMD_ADD_TEXT, @"t");
+        [edit addItem:[NSMenuItem separatorItem]];
         add_plain_item(edit, @"Split at Playhead", SN_CMD_SPLIT);
         add_plain_item(edit, @"Delete", SN_CMD_DELETE);
         add_plain_item(edit, @"Delete and Close the Gap", SN_CMD_RIPPLE_DELETE);
