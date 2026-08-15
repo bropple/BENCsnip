@@ -1,0 +1,95 @@
+name: instrumented windows build
+
+# A Windows build with a clock inside GLFW's window creation.
+#
+# Not part of CI and not run on a push: it exists for one open question. On at
+# least one machine every raylib program takes ten and a half seconds to open
+# a window, all of it inside glfwCreateWindow, and every Windows call GLFW
+# makes has already been timed by hand and found fast - the whole sequence
+# comes back in 317 ms in tools/glprobe.c. So the time is going somewhere
+# between those calls, where only the real code can be made to say so.
+#
+# tools/instrument-glfw.sh puts a timestamped line at each step of window
+# creation. Run this workflow by hand, download the artifact, run the
+# executable, and the last line before the gap names what is slow.
+#
+#   gh workflow run "instrumented windows build"
+
+on:
+  workflow_dispatch:
+
+env:
+  RAYLIB_VERSION: "5.5"
+
+jobs:
+  instrumented:
+    name: windows, with GLFW instrumented
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-nasm
+            git
+            make
+            diffutils
+
+      # Shared with the ordinary Windows job, and not rebuilt here: this
+      # workflow is about GLFW, and waiting twenty minutes for ffmpeg to find
+      # that out would be a poor trade.
+      - name: Cached static ffmpeg
+        id: ffcache
+        uses: actions/cache@v6
+        with:
+          path: vendor/ffmpeg
+          key: ffmpeg-windows-x86_64-${{ hashFiles('tools/build-ffmpeg.sh') }}
+
+      - name: Build static ffmpeg
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        run: tools/build-ffmpeg.sh --jobs 4
+
+      - name: raylib, with the clock put in
+        run: |
+          git clone --depth 1 --branch "$RAYLIB_VERSION" \
+            https://github.com/raysan5/raylib.git /tmp/raylib
+          tools/instrument-glfw.sh /tmp/raylib
+          make -C /tmp/raylib/src PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC -j2
+          mkdir -p /tmp/rl/include /tmp/rl/lib
+          cp /tmp/raylib/src/raylib.h /tmp/raylib/src/raymath.h /tmp/raylib/src/rlgl.h \
+             /tmp/rl/include/
+          cp /tmp/raylib/src/libraylib.a /tmp/rl/lib/
+
+      - name: Build
+        run: RAYLIB=/tmp/rl make
+
+      - name: What came out
+        run: |
+          ls -l bencsnip.exe
+          mkdir -p dist
+          cp bencsnip.exe dist/
+          printf '%s\n' \
+            'This build has a clock inside GLFW. Run it from a terminal:' \
+            '' \
+            '    .\bencsnip.exe --timing' \
+            '' \
+            'and the lines marked [glfw] say how long each step of window' \
+            'creation took. The one before the jump is the answer.' \
+            '' \
+            'It is a debugging build and nothing else - no faster, no more' \
+            'correct, and noisier. Keep the ordinary one for actual use.' \
+            > dist/README-instrumented.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bencsnip-windows-instrumented
+          path: dist/*
+          if-no-files-found: error
