@@ -47,7 +47,15 @@ Name "BENCsnip ${VERSION}"
 OutFile "${OUTFILE}"
 Unicode true
 RequestExecutionLevel admin
-InstallDir "$PROGRAMFILES64\BENCsnip"
+
+; Under a BENCO folder, not straight into Program Files. There are several of
+; these now and they are one company's; a row of BENC-somethings scattered
+; through Program Files reads as several unrelated things from several
+; unrelated people.
+;
+; The uninstaller takes the BENCO folder with it only when this was the last
+; one in it - see the end of the uninstall section.
+InstallDir "$PROGRAMFILES64\BENCO\BENCsnip"
 ShowInstDetails show
 ShowUninstDetails show
 
@@ -94,7 +102,7 @@ VIAddVersionKey "LegalCopyright"  "MIT licensed; this build is GPL as a whole - 
 ; dark tiles on MUI's white; that part is by design.
 
 !define MUI_WELCOMEPAGE_TITLE "BENCsnip ${VERSION}"
-!define MUI_WELCOMEPAGE_TEXT "A video editor for the jobs that should take a minute. Drag a file in, cut the boring bit out, export.$\r$\n$\r$\nThis installs BENCsnip into Program Files for everyone who uses this computer. It carries its own ffmpeg, so there is nothing else to install.$\r$\n$\r$\nAn existing BENCsnip is replaced, not installed beside."
+!define MUI_WELCOMEPAGE_TEXT "A video editor for the jobs that should take a minute. Drag a file in, cut the boring bit out, export.$\r$\n$\r$\nThis installs BENCsnip into Program Files\BENCO for everyone who uses this computer. It carries its own ffmpeg, so there is nothing else to install.$\r$\n$\r$\nAn existing BENCsnip is replaced, not installed beside."
 
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Run BENCsnip"
@@ -317,6 +325,19 @@ Section "Uninstall"
   ; is theirs, and the plain RMDir leaves the folder exactly when there is
   ; something in it worth leaving.
   RMDir "$INSTDIR"
+
+  ; And the BENCO folder above it, when this went to the default place.
+  ;
+  ; RMDir without /r removes a directory only when it is empty, so BENCO goes
+  ; when this was the last BENC program in it and stays when another is still
+  ; installed beside it. RMDir /r there would uninstall the neighbours.
+  ;
+  ; Only for the default directory. Setup lets the directory be changed, and
+  ; what sits above a path somebody typed themselves is not this uninstaller's
+  ; to remove - an install into D:\Apps\BENCsnip should not take D:\Apps with
+  ; it on the way out, however empty it happens to be.
+  StrCmp $INSTDIR "$PROGRAMFILES64\BENCO\BENCsnip" 0 +2
+    RMDir "$INSTDIR\.."
 
   Delete "$SMPROGRAMS\BENCsnip\BENCsnip.lnk"
   Delete "$SMPROGRAMS\BENCsnip\Uninstall BENCsnip.lnk"
