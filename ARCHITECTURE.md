@@ -64,6 +64,12 @@ what it is for is a layout — a small video in the corner of a big one, two
 side by side — and a layout that changed halfway through a track would be a
 different feature with a different interface.
 
+An audio track carries a level of its own, which multiplies the level on each
+of its clips: a clip at half on a track at half is a quarter. Same range and
+same meaning as the clip's, so the two numbers read alike, and per track for
+the reason a mixer has faders — pulling a whole track down should not mean
+undoing what was set clip by clip.
+
 The order of the video tracks is the compositing order, and **the top row is
 the back**. That is the opposite of the convention every other editor uses; it
 is what this one was asked for, and the only defence against the surprise is

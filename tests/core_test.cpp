@@ -574,6 +574,41 @@ static void test_render()
     double full = 0;
     for (float v : mix) full += v * v;
     CHECK(faded < full * 0.5, "a fade at its midpoint is quieter, %f vs %f", faded, full);
+
+    /* The track's level multiplies the clip's. Half the level is a quarter of
+     * the energy, which is the arithmetic and is also the check: a fader
+     * wired to the wrong side of the sum, or applied twice, misses it.
+     *
+     * Two blocks per reading, not one. Asking the mixer for the same second
+     * twice does not hand back the same block: the source keeps a fifo of
+     * whatever the last decoded frame had left over, so consecutive reads at
+     * one time alternate between two phases of it - about 5.2 and 7.8 here.
+     * One block against one block is a coin toss over whether the two
+     * readings came from the same phase, and the pair covers both either way.
+     * The fade check above sidesteps the same thing by reading an extra time
+     * and throwing it away. */
+    auto energy2 = [&]() {
+        double sum = 0;
+        for (int k = 0; k < 2; k++) {
+            r.audioAt(1.0, 1024, mix.data());
+            for (float v : mix) sum += v * v;
+        }
+        return sum;
+    };
+
+    p.tracks[1].gain = 1.0;
+    const double unity = energy2();
+    p.tracks[1].gain = 0.5;
+    const double halved = energy2();
+    CHECK(NEAR(halved, unity * 0.25, unity * 0.02),
+          "a track at half level is a quarter of the energy, %f vs %f", halved,
+          unity * 0.25);
+
+    p.tracks[1].gain = 0.0;
+    e = energy2();
+    CHECK(e == 0.0, "and all the way down is silence");
+
+    p.tracks[1].gain = 1.0;
 }
 
 /* ------------------------------------------------------------------ *
@@ -592,6 +627,7 @@ static void test_project()
     sn::placeItem(p, a, 1.0);
     sn::splitAt(p, 3.0);
     p.tracks[1].clips[0].gain = 0.5;
+    p.tracks[1].gain = 0.75;
     p.tracks[0].clips[0].fadeOut = 0.4;
     p.name = "a test";
 
@@ -606,6 +642,9 @@ static void test_project()
     CHECK(NEAR(q.duration(), p.duration(), 1e-6), "the duration is the same");
     CHECK(q.tracks[0].clips.size() == p.tracks[0].clips.size(), "the cuts came back");
     CHECK(NEAR(q.tracks[1].clips[0].gain, 0.5, 1e-4), "so did the gain");
+    CHECK(NEAR(q.tracks[1].gain, 0.75, 1e-4), "and the track's own level");
+    CHECK(NEAR(q.tracks[0].gain, 1.0, 1e-9),
+          "a track nobody touched comes back at unity, got %f", q.tracks[0].gain);
     CHECK(NEAR(q.tracks[0].clips[0].fadeOut, 0.4, 1e-4), "and the fade");
     CHECK(!q.dirty, "a project just loaded is not dirty");
 

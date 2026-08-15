@@ -81,6 +81,15 @@ struct Track {
     bool muted = false;      /* audio silent / video hidden              */
     bool locked = false;     /* the mouse leaves it alone                */
     int height = 0;          /* 0 = the view's default                   */
+
+    /* The track's own level, on audio tracks, multiplied with each clip's:
+     * a clip at half on a track at half is a quarter. Same range and same
+     * meaning as Clip::gain - linear, 0 to 2, 1 is unmodified - so that the
+     * two numbers read the same way and one fader can be pulled down without
+     * anybody having to undo what was set on the clips.
+     *
+     * Ignored on video tracks, which have no sound to turn down. */
+    double gain = 1.0;
     std::vector<Clip> clips; /* kept sorted by pos, always               */
 
     /* --- where this track's picture sits on the canvas (video only) ---

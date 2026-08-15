@@ -94,6 +94,12 @@ struct App {
     Vector2 dragFrom = {0, 0};
     bool dragMoved = false;
 
+    /* Which track's level fader is being dragged, or -1. It is not one of the
+     * drags above because the fader is a widget and does its own dragging;
+     * this is here only so the undo history gets one entry for the adjustment
+     * rather than one for every pixel of it. */
+    int gainTrack = -1;
+
     /* --- the preview --- */
     Texture2D preview = {};
     int previewW = 0, previewH = 0;

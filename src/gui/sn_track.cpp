@@ -421,6 +421,46 @@ static void draw_heads(App &a)
             a.changed();
         }
 
+        /* --- the level, on audio tracks ---
+         *
+         * The strip between the name and the switches, which is the only room
+         * a 104 pixel header has left, and only on audio tracks: there is
+         * nothing on a video track to turn down.
+         *
+         * Same range and same snap as the level line across a clip - zero to
+         * twice, unity in the middle, and anything within a hair of unity is
+         * unity, because "back to where it was" is the adjustment made most
+         * often and a mouse cannot land on 1.000 by hand. The two multiply,
+         * which is what makes the fader worth having: one number that moves
+         * everything on the track without disturbing what was set clip by
+         * clip.
+         */
+        if (t.kind == TRACK_AUDIO) {
+            Rectangle lv = {h.x + 6, h.y + 20, h.width - 12, 12};
+            float v = (float)(t.gain * 0.5);
+
+            if (sn_slider(&ui, id + 6, lv, &v)) {
+                double g = v * 2.0;
+                if (std::fabs(g - 1.0) < 0.04) g = 1.0;
+                if (g != t.gain) {
+                    t.gain = g;
+                    a.gainTrack = (int)i;
+                    a.changed(true);
+                }
+            }
+
+            if (CheckCollisionPointRec(GetMousePosition(), lv) && !sn_ui_blocked(&ui)) {
+                /* Decibels as well as the percentage, because a fader is
+                 * read in decibels by everyone who has used one and the
+                 * percentage is what the number underneath actually is. */
+                if (t.gain <= 0.0)
+                    sn_tip(&ui, "level: silent");
+                else
+                    sn_tip(&ui, "level: %+.1f dB (%.0f%%)%s", 20.0 * std::log10(t.gain),
+                           t.gain * 100.0, t.muted ? " - and the track is muted" : "");
+            }
+        }
+
         /* --- the switches, along the bottom --- */
         const float by = h.y + h.height - 23;
         Rectangle b1 = {h.x + 6, by, 20, 18};
@@ -473,6 +513,15 @@ static void draw_heads(App &a)
             a.say("deleted %s", nm.c_str());
             break;   /* the vector moved under us */
         }
+    }
+
+    /* One undo entry for the whole adjustment. While the fader moves the
+     * change is minor, the way a clip being dragged is; the commit happens
+     * when the button comes up, and here rather than beside the slider
+     * because sn_ui_frame has already cleared `active` by then. */
+    if (a.gainTrack >= 0 && !IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+        a.gainTrack = -1;
+        a.changed();
     }
 
     EndScissorMode();

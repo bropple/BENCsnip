@@ -133,6 +133,11 @@ bool saveProject(const Project &p, const std::string &path, std::string *err)
             fprintf(f, "xform %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %d\n", t.scaleX,
                     t.x, t.y, t.cropL, t.cropR, t.cropT, t.cropB, t.scaleY,
                     t.stretch ? 1 : 0);
+
+        /* Its own line for the same reason, and only when it is not unity, so
+         * that a project nobody has touched the levels of is byte for byte the
+         * file it was before this existed. */
+        if (t.gain != 1.0) fprintf(f, "level %.6f\n", t.gain);
         for (const Clip &c : t.clips)
             fprintf(f, "clip %d %d %d %.6f %.6f %.6f %.4f %.4f %.4f %d %.6f\n",
                     c.id, c.source, c.link, c.in, c.out, c.pos, c.gain,
@@ -235,6 +240,14 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
                                    &t.cropB, &t.scaleY, &stretch);
             if (got < 8) t.scaleY = t.scaleX;
             t.stretch = stretch != 0;
+        } else if (!strncmp(line, "level ", 6)) {
+            if (trackAt < 0) continue;
+            double g = 1.0;
+            /* Clamped to the range the fader offers. A hand-edited file
+             * asking for forty is a mix nobody can find the way back from,
+             * and the renderer would clip it to a square wave anyway. */
+            if (sscanf(line + 6, "%lf", &g) == 1)
+                p.tracks[trackAt].gain = g < 0.0 ? 0.0 : (g > 2.0 ? 2.0 : g);
         } else if (!strncmp(line, "clip ", 5)) {
             if (trackAt < 0) continue;
             Clip c;
