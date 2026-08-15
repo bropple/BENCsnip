@@ -1071,6 +1071,33 @@ bool g_timing = false;
 /* Set by --msaa, which is off by default. See where it is used. */
 bool g_msaa = false;
 
+/* Everything --timing prints also goes to a file, because the machine with a
+ * startup problem on it is rarely the machine with a terminal in front of it,
+ * and a file can be attached to a message. Written to the temporary
+ * directory rather than beside the executable: this program installs into
+ * Program Files, which is not writable by the person running it. */
+FILE *g_logf = nullptr;
+std::string g_logPath;
+
+void log_open()
+{
+    if (g_logf || g_logPath.empty()) return;
+    g_logf = fopen(g_logPath.c_str(), "w");
+}
+
+/* One line, to the console and to the log. */
+void emit(const char *fmt, ...)
+{
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+
+    if (g_timing) { fputs(buf, stdout); fflush(stdout); }
+    if (g_logf) { fputs(buf, g_logf); fflush(g_logf); }
+}
+
 /* Filled in by trace_hook from raylib's own startup log. */
 char g_glVendor[128];
 char g_glRenderer[128];
@@ -1095,10 +1122,7 @@ void mark(const char *what)
      * stack waiting on a device that is not there - and a report printed
      * afterwards says nothing at all about the run that hung. The last line
      * on screen is the phase that did not come back. */
-    if (g_timing) {
-        printf("  %8.1f ms  %s\n", at, what);
-        fflush(stdout);
-    }
+    emit("  %8.1f ms  %s\n", at, what);
 }
 
 } /* namespace */
@@ -1155,28 +1179,30 @@ void trace_hook(int level, const char *text, va_list args)
 
     /* Quiet unless asked. Warnings and worse always come through, which is
      * what the log level used to be set to. */
-    if (!g_timing && level < LOG_WARNING) return;
+    if (!g_timing && !g_logf && level < LOG_WARNING) return;
 
     const double at =
         std::chrono::duration<double, std::milli>(sn_clock::now() - g_t0).count();
-    printf("  %8.1f ms  raylib: %s\n", at, buf);
-    fflush(stdout);
+    emit("  %8.1f ms  raylib: %s\n", at, buf);
 }
 
 void timing_report()
 {
-    if (!g_timing) return;
-    printf("\nstartup, milliseconds from the first line of main:\n");
+    if (!g_timing && !g_logf) return;
+
+    emit("\nstartup, milliseconds from the first line of main:\n");
     double prev = 0;
     for (int i = 0; i < g_nmarks; i++) {
-        printf("  %8.1f  %+7.1f  %s\n", g_marks[i].at, g_marks[i].at - prev,
-               g_marks[i].what);
+        emit("  %8.1f  %+7.1f  %s\n", g_marks[i].at, g_marks[i].at - prev,
+             g_marks[i].what);
         prev = g_marks[i].at;
     }
-    printf("\n  the first number is also how long the window took to appear.\n"
-           "  anything before that - the loader, a scanner reading the whole\n"
-           "  executable, a driver picking a pixel format - is not in this list\n"
-           "  and is not something the program can shorten from the inside.\n\n");
+    emit("\n  the first number is also how long the window took to appear.\n"
+         "  anything before that - the loader, a scanner reading the whole\n"
+         "  executable, a driver picking a pixel format - is not in this list\n"
+         "  and is not something the program can shorten from the inside.\n\n");
+
+    if (g_logf && g_timing) printf("  this was also written to %s\n\n", g_logPath.c_str());
 }
 
 struct Splash {
@@ -1315,7 +1341,7 @@ static int run(int argc, char **argv)
     SetTraceLogLevel(LOG_ALL);
     SetTraceLogCallback(trace_hook);
     mark("before window");
-    if (g_timing) { printf("  ... asking for the window and a GL context\n"); fflush(stdout); }
+    emit("  ... asking for the window and a GL context\n");
     InitWindow(1280, 760, SN_NAME " " SN_VERSION);
     mark("window + GL");
     SetWindowMinSize(900, 560);
@@ -1331,7 +1357,7 @@ static int run(int argc, char **argv)
     splashDraw(a, "starting", 0.15f);
     mark("first frame");
 
-    if (g_timing) { printf("  ... opening an audio device\n"); fflush(stdout); }
+    emit("  ... opening an audio device\n");
     InitAudioDevice();
     mark("audio");
     splashDraw(a, "sound", 0.35f);
@@ -1377,7 +1403,9 @@ static int run(int argc, char **argv)
         if (argv[i][0] == '-') {
             /* Skip the option's argument too, or a filename is imported that
              * was never meant as one. */
-            if (!strcmp(argv[i], "--shot") || !strcmp(argv[i], "--frames")) i++;
+            if (!strcmp(argv[i], "--shot") || !strcmp(argv[i], "--frames") ||
+                !strcmp(argv[i], "--log"))
+                i++;
             continue;
         }
         /* Named before it is opened, not after: probing a file on a slow
@@ -1612,7 +1640,19 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--timing")) sn::g_timing = true;
         if (!strcmp(argv[i], "--msaa")) sn::g_msaa = true;
+        if (!strcmp(argv[i], "--log") && i + 1 < argc) sn::g_logPath = argv[i + 1];
     }
+
+    /* A log is written whenever timings were asked for, and --log puts it
+     * somewhere chosen. Somewhere writable by default: this installs into
+     * Program Files, and the person running it cannot write there. */
+    if (sn::g_timing && sn::g_logPath.empty()) {
+        const char *tmp = getenv("TEMP");
+        if (!tmp || !*tmp) tmp = getenv("TMPDIR");
+        if (!tmp || !*tmp) tmp = "/tmp";
+        sn::g_logPath = std::string(tmp) + "/bencsnip-startup.log";
+    }
+    if (!sn::g_logPath.empty()) { sn::g_timing = true; sn::log_open(); }
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--version") || !strcmp(argv[i], "-v")) {
@@ -1635,6 +1675,8 @@ int main(int argc, char **argv)
             printf("  --shot FILE.png    draw a few frames, write a screenshot, exit\n");
             printf("  --frames N         how many frames to draw first (default 60)\n");
             printf("  --timing           print how long each part of starting up took\n");
+            printf("  --log FILE         write the startup log here. Implied by --timing,\n");
+            printf("                     which writes one to the temporary directory\n");
             printf("  --msaa             ask for a multisampled pixel format. Smooths\n");
             printf("                     the one curved thing on screen, and on some\n");
             printf("                     drivers costs ten seconds of startup for it\n");

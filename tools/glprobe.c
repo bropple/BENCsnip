@@ -117,14 +117,97 @@ int main(void)
     const char *version = (const char *)glGetString(GL_VERSION);
     step("glGetString");
 
+    /* ---------------------------------------------------------------- *
+     * The rest: what GLFW does that the plain path above does not.
+     *
+     * Everything so far is the old GDI way of getting a context, and on the
+     * machine this was written for it takes a fifth of a second. GLFW asks
+     * differently - it uses the WGL extensions, and to choose a format it
+     * reads the attributes of every format the driver offers, one call each.
+     * That loop is the thing to time, because a driver with several hundred
+     * formats and a slow answer for each turns into ten seconds without
+     * anything having gone wrong in a way an error could report.
+     * ---------------------------------------------------------------- */
+
+    typedef BOOL(WINAPI * PFN_GETATTRIBIV)(HDC, int, int, UINT, const int *, int *);
+    typedef BOOL(WINAPI * PFN_CHOOSEFMT)(HDC, const int *, const FLOAT *, UINT, int *,
+                                         UINT *);
+    typedef HGLRC(WINAPI * PFN_CREATECTX)(HDC, HGLRC, const int *);
+
+    PFN_GETATTRIBIV getAttribiv =
+        (PFN_GETATTRIBIV)(void *)wglGetProcAddress("wglGetPixelFormatAttribivARB");
+    PFN_CHOOSEFMT chooseARB =
+        (PFN_CHOOSEFMT)(void *)wglGetProcAddress("wglChoosePixelFormatARB");
+    PFN_CREATECTX createCtx =
+        (PFN_CREATECTX)(void *)wglGetProcAddress("wglCreateContextAttribsARB");
+    step("load the WGL extension entry points");
+
+    printf("\n  the WGL path, which is the one GLFW takes:\n");
+    printf("  %9s     %9s  %s\n", "at", "took", "step");
+
+    if (!getAttribiv) {
+        printf("  no wglGetPixelFormatAttribivARB; nothing more to measure\n");
+    } else {
+        enum { WGL_NUMBER_PIXEL_FORMATS_ARB = 0x2000 };
+        int nFormats = 0;
+        const int countAttrib = WGL_NUMBER_PIXEL_FORMATS_ARB;
+        getAttribiv(dc, 1, 0, 1, &countAttrib, &nFormats);
+        step("ask how many pixel formats there are");
+        printf("               %d formats offered\n", nFormats);
+
+        /* The same attributes GLFW asks for, in the same shape: one call per
+         * format, every attribute at once. */
+        static const int attribs[] = {
+            0x2001, /* DRAW_TO_WINDOW */ 0x2010, /* SUPPORT_OPENGL   */
+            0x2011, /* DOUBLE_BUFFER  */ 0x2003, /* ACCELERATION     */
+            0x2013, /* PIXEL_TYPE     */ 0x2015, /* RED_BITS         */
+            0x2017, /* GREEN_BITS     */ 0x2019, /* BLUE_BITS        */
+            0x201B, /* ALPHA_BITS     */ 0x2022, /* DEPTH_BITS       */
+            0x2023, /* STENCIL_BITS   */ 0x2042, /* SAMPLES          */
+        };
+        const UINT nAttribs = (UINT)(sizeof attribs / sizeof attribs[0]);
+        int values[16];
+
+        const double before = ms_now();
+        for (int i = 1; i <= nFormats; i++) getAttribiv(dc, i, 0, nAttribs, attribs, values);
+        const double after = ms_now();
+        g_last = before;
+        step("read every format's attributes, one call each");
+
+        if (nFormats > 0)
+            printf("               %.2f ms per format, %d of them\n",
+                   (after - before) / nFormats, nFormats);
+    }
+
+    if (chooseARB) {
+        int fmt = 0;
+        UINT n = 0;
+        static const int want[] = {0x2001, 1, 0x2010, 1, 0x2011, 1,
+                                   0x2013, 0x202B, 0x2015, 8, 0x2017, 8,
+                                   0x2019, 8, 0x2022, 24, 0};
+        chooseARB(dc, want, NULL, 1, &fmt, &n);
+        step("wglChoosePixelFormatARB, which asks the driver to choose");
+    }
+
+    if (createCtx) {
+        /* A 3.3 core context, which is what raylib asks for and what the
+         * plain path above does not: the context it got was 4.6
+         * compatibility, chosen by the driver. */
+        static const int attr[] = {0x2091, 3, 0x2092, 3, 0x9126, 0x00000001, 0};
+        HGLRC rc2 = createCtx(dc, NULL, attr);
+        step("wglCreateContextAttribsARB for 3.3 core");
+        if (rc2) wglDeleteContext(rc2);
+        else printf("               (the driver refused it)\n");
+    }
+
     printf("\n  vendor:   %s\n", vendor ? vendor : "?");
     printf("  renderer: %s\n", renderer ? renderer : "?");
     printf("  version:  %s\n\n", version ? version : "?");
 
-    printf("  A step that took ten seconds on its own is a timeout, not work.\n"
-           "  wglCreateContext is where the graphics driver is first loaded\n"
-           "  into this process; CreateWindowEx is where anything hooking\n"
-           "  windows would be.\n\n");
+    printf("  Whichever line above holds the missing seconds is the answer.\n"
+           "  If it is the per-format loop, the driver is slow to describe\n"
+           "  each of its pixel formats and GLFW reads all of them; that is\n"
+           "  work rather than a fault, and it is the same every run.\n\n");
 
     wglMakeCurrent(NULL, NULL);
     wglDeleteContext(rc);
