@@ -22,6 +22,7 @@
  */
 
 #include "sn_app.h"
+#include "sn_appmenu.h"
 #include "sn_embed.h"
 #include "sn_filedlg.h"
 #include "sn_version.h"
@@ -348,6 +349,285 @@ void previewPane(App &a, Rectangle r)
                              c.height * sc};
         };
 
+        const bool overView = CheckCollisionPointRec(m, view) && !sn_ui_blocked(&a.ui);
+
+        /* --- captions ------------------------------------------------
+         *
+         * A caption is placed per clip rather than per track, so this cannot
+         * reuse the layer handles above: what is being moved is one clip's
+         * style, and two captions on one track are two different positions.
+         * It is also rotatable, which nothing else on this canvas is, so the
+         * box is four corners rather than a rectangle and every hit test here
+         * is against a quad.
+         *
+         * It runs before the layer code so that a caption in front of a video
+         * layer is what a click on it picks. Pressing on one sets a.drag
+         * immediately - even for a click that only selects - which is what
+         * stops the layer code below from also grabbing the picture
+         * underneath, and is what that code does for its own layers.
+         *
+         * The geometry comes from textBox() in the core, which is the same
+         * measurement the renderer fills. Working it out again here would be
+         * two answers to one question, and the one the mouse got would be the
+         * wrong one.
+         * ------------------------------------------------------------------ */
+        {
+            const int CW = a.proj.width, CH = a.proj.height;
+
+            auto capQuad = [&](const TextStyle &st, Vector2 out[4]) {
+                double k[8];
+                if (!textBox(st, CW, CH, k)) return false;
+                for (int i = 0; i < 4; i++)
+                    out[i] = Vector2{dst.x + (float)k[i * 2] * sc,
+                                     dst.y + (float)k[i * 2 + 1] * sc};
+                return true;
+            };
+
+            auto centreOf = [](const Vector2 q[4]) {
+                return Vector2{(q[0].x + q[1].x + q[2].x + q[3].x) * 0.25f,
+                               (q[0].y + q[1].y + q[2].y + q[3].y) * 0.25f};
+            };
+
+            /* Inside a convex quad is on the same side of all four edges. */
+            auto inQuad = [](Vector2 p, const Vector2 q[4]) {
+                int pos = 0, neg = 0;
+                for (int i = 0; i < 4; i++) {
+                    const Vector2 &u = q[i], &v = q[(i + 1) & 3];
+                    const float d =
+                        (p.x - u.x) * (v.y - u.y) - (p.y - u.y) * (v.x - u.x);
+                    if (d > 0.0f) pos++;
+                    else if (d < 0.0f) neg++;
+                }
+                return pos == 0 || neg == 0;
+            };
+
+            /* What is selected, taken from the timeline's selection so that
+             * the two panes cannot hold different ideas of it. Only a caption
+             * the playhead is actually inside gets handles: drawing them
+             * around something not on screen would be furniture over a frame
+             * it has nothing to do with. */
+            Clip *cap = nullptr;
+            for (const ClipRef &r0 : a.sel) {
+                const Track *t0 = a.proj.track(r0.track);
+                if (!t0 || t0->kind != TRACK_TEXT || t0->locked) continue;
+                Clip *c0 = a.proj.clip(r0);
+                if (!c0 || !c0->covers(a.playhead)) continue;
+                cap = c0;
+                a.textClip = r0;
+                break;
+            }
+
+            /* Front to back, so a click picks what can be seen. */
+            ClipRef capHit;
+            for (int i = (int)a.proj.tracks.size() - 1; i >= 0 && !capHit.ok(); i--) {
+                const Track &t0 = a.proj.tracks[i];
+                if (t0.kind != TRACK_TEXT || t0.muted || t0.locked) continue;
+                const Clip *c0 = t0.at(a.playhead);
+                if (!c0 || c0->text.text.empty()) continue;
+
+                Vector2 q[4];
+                if (capQuad(c0->text, q) && inQuad(m, q))
+                    capHit = ClipRef{i, c0->id};
+            }
+
+            /* --- the handles --- */
+            Vector2 q[4] = {};
+            Vector2 rot = {0, 0};
+            bool haveBox = false;
+
+            if (cap && capQuad(cap->text, q)) {
+                haveBox = true;
+
+                /* The turn handle stands off the top edge along the box's own
+                 * up direction, so it follows the caption round rather than
+                 * staying north of it and crossing the box at 180 degrees. */
+                const Vector2 topMid = {(q[0].x + q[1].x) * 0.5f, (q[0].y + q[1].y) * 0.5f};
+                const Vector2 botMid = {(q[2].x + q[3].x) * 0.5f, (q[2].y + q[3].y) * 0.5f};
+                float ux = topMid.x - botMid.x, uy = topMid.y - botMid.y;
+                const float ul = std::sqrt(ux * ux + uy * uy);
+                if (ul > 0.001f) { ux /= ul; uy /= ul; }
+                rot = Vector2{topMid.x + ux * 22.0f, topMid.y + uy * 22.0f};
+
+                for (int i = 0; i < 4; i++)
+                    DrawLineEx(q[i], q[(i + 1) & 3], 1.0f, SN_ACCENT);
+                DrawLineEx(topMid, rot, 1.0f, SN_ACCENT);
+
+                const float k = 4.5f;
+                for (int i = 0; i < 4; i++) {
+                    DrawRectangleRec(Rectangle{q[i].x - k, q[i].y - k, k * 2, k * 2}, SN_BG);
+                    DrawRectangleLinesEx(Rectangle{q[i].x - k, q[i].y - k, k * 2, k * 2}, 1,
+                                         SN_ACCENT);
+                }
+                DrawCircleV(rot, 4.5f, SN_BG);
+                DrawCircleLinesV(rot, 4.5f, SN_ACCENT);
+            }
+
+            auto near = [](Vector2 p, Vector2 t, float r) {
+                return std::fabs(p.x - t.x) <= r && std::fabs(p.y - t.y) <= r;
+            };
+
+            /* --- starting --- */
+            if (overView && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                a.drag == DRAG_NONE) {
+                int corner = -1;
+                bool onRot = false;
+                if (haveBox) {
+                    for (int i = 0; i < 4; i++)
+                        if (near(m, q[i], 7.0f)) corner = i;
+                    onRot = corner < 0 && near(m, rot, 8.0f);
+                }
+
+                if (haveBox && (corner >= 0 || onRot)) {
+                    a.drag = onRot ? DRAG_TEXT_ROT : DRAG_TEXT_SIZE;
+                    a.textHandle = corner;
+                    a.textGrab = cap->text;
+                    a.layerFrom = m;
+                    a.dragMoved = false;
+
+                    const Vector2 ctr = centreOf(q);
+                    a.textRotGrab = std::atan2(m.y - ctr.y, m.x - ctr.x);
+                } else if (capHit.ok()) {
+                    a.sel.clear();
+                    a.sel.push_back(capHit);
+                    a.textClip = capHit;
+                    a.layoutTrack = -1;         /* one thing selected at a time */
+
+                    cap = a.proj.clip(capHit);
+                    if (cap) {
+                        a.drag = DRAG_TEXT;
+                        a.textHandle = -1;
+                        a.textGrab = cap->text;
+                        a.layerFrom = m;
+                        a.dragMoved = false;
+                    }
+                }
+            }
+
+            /* --- carrying on --- */
+            if (a.drag == DRAG_TEXT || a.drag == DRAG_TEXT_SIZE ||
+                a.drag == DRAG_TEXT_ROT) {
+                Clip *c1 = a.proj.clip(a.textClip);
+
+                if (!c1) {
+                    a.drag = DRAG_NONE;
+                } else {
+                    if (!a.dragMoved && std::fabs(m.x - a.layerFrom.x) +
+                                                std::fabs(m.y - a.layerFrom.y) >= 2.0f)
+                        a.dragMoved = true;
+
+                    if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+                        if (a.dragMoved) a.changed();
+                        a.drag = DRAG_NONE;
+                        a.textHandle = -1;
+                    } else if (a.dragMoved) {
+                        /* Every frame works from the style as it was when the
+                         * drag began, not from the style as it is now. Reading
+                         * back what the last frame wrote accumulates its own
+                         * rounding, and a caption dragged slowly across the
+                         * canvas arrives somewhere the pointer is not. */
+                        Vector2 g[4];
+                        if (capQuad(a.textGrab, g)) {
+                            const Vector2 ctr = centreOf(g);
+                            const double lw = std::hypot(g[1].x - g[0].x, g[1].y - g[0].y) / sc;
+                            const double lh = std::hypot(g[2].x - g[1].x, g[2].y - g[1].y) / sc;
+
+                            TextStyle st = a.textGrab;
+
+                            if (a.drag == DRAG_TEXT) {
+                                /* The centre moves with the pointer, and then
+                                 * becomes x and y again: fractions of the space
+                                 * left over, which is what makes -1 mean "hard
+                                 * against that edge" at any size. */
+                                const double ncx =
+                                    (ctr.x - dst.x) / sc + (m.x - a.layerFrom.x) / sc;
+                                const double ncy =
+                                    (ctr.y - dst.y) / sc + (m.y - a.layerFrom.y) / sc;
+
+                                const double freeW = CW - lw, freeH = CH - lh;
+                                st.x = std::fabs(freeW) < 1.0
+                                           ? 0.0
+                                           : (ncx - lw * 0.5) / (freeW * 0.5) - 1.0;
+                                st.y = std::fabs(freeH) < 1.0
+                                           ? 0.0
+                                           : (ncy - lh * 0.5) / (freeH * 0.5) - 1.0;
+                                st.x = std::max(-4.0, std::min(4.0, st.x));
+                                st.y = std::max(-4.0, std::min(4.0, st.y));
+                            } else if (a.drag == DRAG_TEXT_SIZE) {
+                                /* How much further from the centre the pointer
+                                 * is than the corner it grabbed. Distance
+                                 * rather than an axis, because the box may be
+                                 * turned and "wider" then has no screen
+                                 * direction to mean. */
+                                const int h = a.textHandle >= 0 ? a.textHandle : 0;
+                                const double was = std::hypot(g[h].x - ctr.x, g[h].y - ctr.y);
+                                const double now = std::hypot(m.x - ctr.x, m.y - ctr.y);
+                                if (was > 1.0) {
+                                    double f = now / was;
+                                    f = std::max(0.05, std::min(20.0, f));
+                                    st.size = std::max(0.005, std::min(2.0,
+                                                                       a.textGrab.size * f));
+                                }
+                            } else {
+                                double d = (std::atan2(m.y - ctr.y, m.x - ctr.x) -
+                                            a.textRotGrab) *
+                                           180.0 / 3.14159265358979323846;
+                                double r1 = a.textGrab.rotation + d;
+
+                                /* Shift steps by fifteen degrees; without it,
+                                 * upright is sticky, because level is what
+                                 * almost every caption wants and a mouse
+                                 * cannot land on zero. */
+                                const bool shiftDown = IsKeyDown(KEY_LEFT_SHIFT) ||
+                                                       IsKeyDown(KEY_RIGHT_SHIFT);
+                                if (shiftDown) r1 = std::round(r1 / 15.0) * 15.0;
+                                else if (std::fabs(r1) < 2.0) r1 = 0.0;
+
+                                while (r1 > 180.0) r1 -= 360.0;
+                                while (r1 < -180.0) r1 += 360.0;
+                                st.rotation = r1;
+                            }
+
+                            if (st != c1->text) {
+                                c1->text = st;
+                                a.changed(true);
+                            }
+                        }
+                    }
+                }
+            }
+
+            /* --- what the pointer says it will do --- */
+            if (overView && a.drag == DRAG_NONE) {
+                bool said = false;
+                if (haveBox) {
+                    for (int i = 0; i < 4; i++)
+                        if (near(m, q[i], 7.0f)) {
+                            sn_cursor(&a.ui, i == 0 || i == 2 ? MOUSE_CURSOR_RESIZE_NWSE
+                                                              : MOUSE_CURSOR_RESIZE_NESW);
+                            sn_tip(&a.ui, "drag to resize the caption");
+                            said = true;
+                        }
+                    if (!said && near(m, rot, 8.0f)) {
+                        sn_cursor(&a.ui, MOUSE_CURSOR_POINTING_HAND);
+                        sn_tip(&a.ui, "drag to turn it - Shift steps by fifteen degrees");
+                        said = true;
+                    }
+                }
+                if (!said && capHit.ok()) {
+                    sn_cursor(&a.ui, MOUSE_CURSOR_RESIZE_ALL);
+                    sn_tip(&a.ui, "drag the caption about. Double-click for the words");
+                    said = true;
+                }
+            }
+
+            /* Double-click opens the window with the words in it. */
+            if (overView && capHit.ok() && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                sn_double_click(&a.ui, 5300 + capHit.track)) {
+                a.textClip = capHit;
+                a.modal = MODAL_TEXT;
+            }
+        }
+
         /* Front to back, so a click picks what a person can actually see:
          * the list is stored back-first.
          *
@@ -363,7 +643,6 @@ void previewPane(App &a, Rectangle r)
             if (CheckCollisionPointRec(m, toScreen(layerRect(t)))) hit = i;
         }
 
-        const bool overView = CheckCollisionPointRec(m, view) && !sn_ui_blocked(&a.ui);
         Track *sel = a.proj.track(a.layoutTrack);
         if (sel && (sel->kind != TRACK_VIDEO || sel->locked)) sel = nullptr;
 
@@ -655,6 +934,156 @@ static void open_files(App &a, bool project)
     }
 }
 
+/* ------------------------------------------------------------------ *
+ * The commands
+ *
+ * Everything below is reachable from more than one place - a toolbar button,
+ * a key, and on macOS a menu - and each of those used to carry its own copy of
+ * what the command does. Which is how the toolbar's undo came to leave the
+ * player's end where it was while the keyboard's moved it: four lines written
+ * twice, and only one of the copies learned about setEnd.
+ *
+ * One function per command, then, and the callers choose which to call and
+ * nothing else. Each returns without complaint when there is nothing to do,
+ * because a menu item is clickable whether or not it applies and a caller that
+ * had to check first would be the duplication coming back in.
+ * ------------------------------------------------------------------ */
+
+static void cmd_new(App &a)
+{
+    if (a.proj.dirty) {
+        a.confirmText = "Throw away the unsaved changes?";
+        a.confirmTag = 2;
+        a.modal = MODAL_CONFIRM;
+        return;
+    }
+    a.proj = newProject();
+    a.hist.reset(a.proj);
+    a.thumbs.clear();
+    a.playhead = 0;
+    a.changed(true);
+}
+
+static void cmd_undo(App &a)
+{
+    if (!a.hist.undo(&a.proj)) return;
+    a.rev++;
+    a.sel.clear();
+    a.player.setEnd(a.proj.duration());
+    a.say("undone");
+}
+
+static void cmd_redo(App &a)
+{
+    if (!a.hist.redo(&a.proj)) return;
+    a.rev++;
+    a.sel.clear();
+    a.player.setEnd(a.proj.duration());
+    a.say("redone");
+}
+
+static void cmd_export(App &a)
+{
+    if (a.proj.duration() <= 0) return;
+    exportDialogPrepare(a);
+    a.modal = MODAL_EXPORT;
+}
+
+static void cmd_select_all(App &a)
+{
+    a.sel.clear();
+    for (size_t i = 0; i < a.proj.tracks.size(); i++)
+        for (const Clip &c : a.proj.tracks[i].clips)
+            a.sel.push_back(ClipRef{(int)i, c.id});
+    a.say("selected %d clips", (int)a.sel.size());
+}
+
+/* Put a caption on the timeline at the playhead, and open the window that
+ * says what it reads.
+ *
+ * It goes on the frontmost text track if there is one, and on a new one if
+ * there is not. Not always a new one: somebody adding a second caption to a
+ * sequence means the next caption, not a second layer of them, and a stack of
+ * one-clip tracks is a timeline nobody can read. Putting it in front is the
+ * same argument addTrack makes about where a new text track goes.
+ *
+ * Five seconds because a caption is read rather than watched, and because a
+ * length that has to be trimmed is friendlier than one that has to be found. */
+static void cmd_add_text(App &a)
+{
+    int track = -1;
+    for (size_t i = 0; i < a.proj.tracks.size(); i++)
+        if (a.proj.tracks[i].kind == TRACK_TEXT) track = (int)i;
+
+    if (track < 0) {
+        track = addTrack(a.proj, TRACK_TEXT);
+        if (track < 0) return;
+    }
+
+    Clip c;
+    c.id = a.proj.newId();
+    c.source = 0;
+    c.in = 0.0;
+    c.out = 5.0;
+    c.pos = std::max(0.0, a.playhead);
+    c.text.text = "Text";
+    c.text.size = 0.12;
+    c.text.y = 0.6;                       /* low, where a caption belongs */
+    c.text.fill = 0xffffffffu;
+    c.text.outline = 0x000000ffu;
+    c.text.outlineWidth = 0.08;
+
+    const Clip *put = addClip(a.proj, track, c);
+    if (!put) return;
+
+    a.sel.clear();
+    a.sel.push_back(ClipRef{track, put->id});
+    a.textClip = a.sel[0];
+    a.changed();
+    a.modal = MODAL_TEXT;
+    a.say("caption added at %s", fmtTime(c.pos).c_str());
+}
+
+/* ------------------------------------------------------------------ *
+ * The menu bar
+ *
+ * macOS only for now - see sn_appmenu.h. Drained once a frame rather than
+ * acted on where AppKit delivers it, which is inside GLFW's event poll and
+ * therefore inside a frame that is already drawing this project.
+ * ------------------------------------------------------------------ */
+
+static void appmenu(App &a)
+{
+    for (int cmd; (cmd = sn_appmenu_take()) != SN_CMD_NONE;) {
+        /* A modal window has the screen. A menu command that reached past it
+         * would act on a timeline nobody can currently see, which is what
+         * keys() decided about the keyboard for the same reason. The pick is
+         * still taken off the queue, so it is dropped rather than saved up to
+         * fire the moment the dialog closes. */
+        if (a.modal != MODAL_NONE) continue;
+
+        switch (cmd) {
+        case SN_CMD_NEW:           cmd_new(a); break;
+        case SN_CMD_OPEN:          open_files(a, true); break;
+        case SN_CMD_IMPORT:        open_files(a, false); break;
+        case SN_CMD_SAVE:          save_project(a, false); break;
+        case SN_CMD_SAVE_AS:       save_project(a, true); break;
+        case SN_CMD_EXPORT:        cmd_export(a); break;
+
+        case SN_CMD_UNDO:          cmd_undo(a); break;
+        case SN_CMD_REDO:          cmd_redo(a); break;
+        case SN_CMD_ADD_TEXT:      cmd_add_text(a); break;
+        case SN_CMD_SPLIT:         doSplit(a); break;
+        case SN_CMD_DELETE:        doDelete(a, false); break;
+        case SN_CMD_RIPPLE_DELETE: doDelete(a, true); break;
+        case SN_CMD_SELECT_ALL:    cmd_select_all(a); break;
+        case SN_CMD_DESELECT:      a.clearSel(); break;
+
+        default: break;
+        }
+    }
+}
+
 static void toolbar(App &a, Rectangle r)
 {
     sn_ui &ui = a.ui;
@@ -690,12 +1119,12 @@ static void toolbar(App &a, Rectangle r)
 
     if (sn_icon_button(&ui, 13, Rectangle{x, y, bw, bh}, SN_I_UNDO, a.hist.canUndo(), 0,
                        "undo (Ctrl+Z)")) {
-        if (a.hist.undo(&a.proj)) { a.rev++; a.sel.clear(); a.say("undone"); }
+        cmd_undo(a);
     }
     x += bw + 4;
     if (sn_icon_button(&ui, 14, Rectangle{x, y, bw, bh}, SN_I_REDO, a.hist.canRedo(), 0,
                        "redo (Ctrl+Shift+Z)")) {
-        if (a.hist.redo(&a.proj)) { a.rev++; a.sel.clear(); a.say("redone"); }
+        cmd_redo(a);
     }
     x += bw + 4;
     gap();
@@ -708,6 +1137,11 @@ static void toolbar(App &a, Rectangle r)
     if (sn_icon_button(&ui, 16, Rectangle{x, y, bw, bh}, SN_I_TRASH, !a.sel.empty(), 0,
                        "delete the selected clip (Del, or Shift+Del to close the gap)")) {
         doDelete(a, false);
+    }
+    x += bw + 4;
+    if (sn_icon_button(&ui, 25, Rectangle{x, y, bw, bh}, SN_I_TEXT, 1, 0,
+                       "put a caption on the picture at the playhead (Ctrl+T)")) {
+        cmd_add_text(a);
     }
     x += bw + 4;
     gap();
@@ -752,12 +1186,7 @@ static void toolbar(App &a, Rectangle r)
     }
 
     Rectangle exp = {info.x - 92, y, 86, bh};
-    if (sn_button_lit(&ui, 22, exp, "EXPORT", a.proj.duration() > 0)) {
-        if (a.proj.duration() > 0) {
-            exportDialogPrepare(a);
-            a.modal = MODAL_EXPORT;
-        }
-    }
+    if (sn_button_lit(&ui, 22, exp, "EXPORT", a.proj.duration() > 0)) cmd_export(a);
 
     /* --- the project's name ---
      *
@@ -834,46 +1263,15 @@ static void keys(App &a)
     if (a.modal != MODAL_NONE) return;
 
     if (ctrl) {
-        if (IsKeyPressed(KEY_Z)) {
-            if (shift ? a.hist.redo(&a.proj) : a.hist.undo(&a.proj)) {
-                a.rev++;
-                a.sel.clear();
-                a.player.setEnd(a.proj.duration());
-                a.say(shift ? "redone" : "undone");
-            }
-        }
-        if (IsKeyPressed(KEY_Y) && a.hist.redo(&a.proj)) {
-            a.rev++;
-            a.sel.clear();
-            a.say("redone");
-        }
+        if (IsKeyPressed(KEY_Z)) { if (shift) cmd_redo(a); else cmd_undo(a); }
+        if (IsKeyPressed(KEY_Y)) cmd_redo(a);
         if (IsKeyPressed(KEY_S)) save_project(a, shift);
         if (IsKeyPressed(KEY_O)) open_files(a, true);
         if (IsKeyPressed(KEY_I)) open_files(a, false);
-        if (IsKeyPressed(KEY_E) && a.proj.duration() > 0) {
-            exportDialogPrepare(a);
-            a.modal = MODAL_EXPORT;
-        }
-        if (IsKeyPressed(KEY_N)) {
-            if (a.proj.dirty) {
-                a.confirmText = "Throw away the unsaved changes?";
-                a.confirmTag = 2;
-                a.modal = MODAL_CONFIRM;
-            } else {
-                a.proj = newProject();
-                a.hist.reset(a.proj);
-                a.thumbs.clear();
-                a.playhead = 0;
-                a.changed(true);
-            }
-        }
-        if (IsKeyPressed(KEY_A)) {
-            a.sel.clear();
-            for (size_t i = 0; i < a.proj.tracks.size(); i++)
-                for (const Clip &c : a.proj.tracks[i].clips)
-                    a.sel.push_back(ClipRef{(int)i, c.id});
-            a.say("selected %d clips", (int)a.sel.size());
-        }
+        if (IsKeyPressed(KEY_E)) cmd_export(a);
+        if (IsKeyPressed(KEY_N)) cmd_new(a);
+        if (IsKeyPressed(KEY_A)) cmd_select_all(a);
+        if (IsKeyPressed(KEY_T)) cmd_add_text(a);
         return;
     }
 
@@ -1028,25 +1426,6 @@ static void menus(App &a)
 static const char *g_shot = nullptr;
 static int g_shotAfter = 60;
 
-
-/* ------------------------------------------------------------------ *
- * The splash
- *
- * Not decoration, and not a delay: the window exists from the moment
- * InitWindow returns, and without this it sits there empty until every other
- * piece of startup has finished. On a machine where the graphics driver takes
- * its time, or where a project on the command line has twenty clips to probe,
- * that empty window is the program looking hung while it works.
- *
- * So it draws once per phase, saying which phase. Everything it needs - the
- * icon, the wordmark, the font - is already inside the executable, and the
- * font is loaded first precisely so this can use it.
- *
- * What it cannot cover is anything before InitWindow: the loader mapping a
- * 28 MB binary, a virus scanner reading all of it, Gatekeeper verifying a
- * signature. Those happen before a line of this program runs, and no splash
- * screen in any program has ever covered them.
- * ------------------------------------------------------------------ */
 
 /* ------------------------------------------------------------------ *
  * How long each part of starting up took
@@ -1205,109 +1584,28 @@ void timing_report()
     if (g_logf && g_timing) printf("  this was also written to %s\n\n", g_logPath.c_str());
 }
 
-struct Splash {
-    Texture2D mark = {};      /* the BENCO wordmark   */
-    Texture2D icon = {};      /* the program's icon   */
-    bool ready = false;
-    bool shown = false;       /* the panel has been on screen at least once */
-
-    /* No minimum time on screen, deliberately: it is up for exactly as long
-     * as there is work behind it, and a splash screen that outstays the
-     * loading it reports is the thing this program's README makes fun of
-     * Clipchamp for. There is a minimum before it appears at all, though -
-     * see splashDraw. */
-};
-
-Splash g_splash;
-
-void splashInit(App &a)
-{
-    Image m = LoadImageFromMemory(".png", SN_LOGO_PNG, (int)SN_LOGO_PNG_LEN);
-    if (m.data) { g_splash.mark = LoadTextureFromImage(m); UnloadImage(m); }
-
-    Image i = LoadImageFromMemory(".png", SN_ICON_64, (int)SN_ICON_64_LEN);
-    if (i.data) { g_splash.icon = LoadTextureFromImage(i); UnloadImage(i); }
-
-    g_splash.ready = true;
-    (void)a;
-}
-
-/* One frame. `frac` is how far through startup we are, and is honest rather
- * than smooth - it moves when something actually finished.
+/* One cleared frame, before any of the work below.
  *
- * The window is always cleared, so that what is on screen from the first
- * moment is the program's own background rather than whatever was behind it.
- * The panel on top of that only appears once startup has gone on long enough
- * to be worth reporting - a quarter of a second - because a splash screen
- * that comes and goes inside a blink is a flash of furniture, which is worse
- * than nothing at all. On a machine where the whole of startup is two hundred
- * milliseconds nobody ever sees it, and nobody should.
+ * There used to be a splash screen here: a panel with the wordmark, the
+ * version and a progress bar, redrawn between the phases of startup. It was
+ * built when startup could take ten and a half seconds, and it existed to say
+ * that the ten and a half seconds were being spent rather than lost. That
+ * cause is gone - it was GLFW enumerating game controllers, and it is not
+ * enumerated any more - so what is left is furniture in front of a program
+ * that is already ready, which is the thing this one's README makes fun of
+ * Clipchamp for.
  *
- * Once it has been shown it keeps being shown, so it cannot appear for one
- * phase and vanish for the next. */
-void splashDraw(App &a, const char *phase, float frac)
+ * This much stays. Between the window appearing and the first pass of the
+ * loop the back buffer holds whatever was there before, and on some systems
+ * that is the desktop behind it; one clear means the first thing on screen is
+ * this program's own background. It is also what "first frame" is a mark for,
+ * which is the number the information window reports as how long the window
+ * took to appear. */
+void first_frame()
 {
-    if (!g_splash.ready) return;
-
-    const double elapsed =
-        std::chrono::duration<double, std::milli>(sn_clock::now() - g_t0).count();
-    if (!g_splash.shown && elapsed < 250.0) {
-        BeginDrawing();
-        ClearBackground(SN_BG);
-        EndDrawing();
-        return;
-    }
-    g_splash.shown = true;
-
-    const float W = (float)GetScreenWidth(), H = (float)GetScreenHeight();
-
     BeginDrawing();
     ClearBackground(SN_BG);
-
-    /* A panel rather than the whole window: the window is 1280 wide and a
-     * wordmark stranded in the middle of that much near-black reads as a
-     * program that has failed to draw itself. */
-    Rectangle box = {std::floor(W * 0.5f - 210), std::floor(H * 0.5f - 100), 420, 200};
-    sn_panel(box, SN_PANEL, SN_BORDER);
-
-    if (g_splash.icon.id) {
-        DrawTexturePro(g_splash.icon,
-                       Rectangle{0, 0, (float)g_splash.icon.width,
-                                 (float)g_splash.icon.height},
-                       Rectangle{box.x + 26, box.y + 30, 64, 64}, Vector2{0, 0}, 0,
-                       WHITE);
-    }
-
-    if (g_splash.mark.id) {
-        const float mw = 150.0f;
-        const float mh = mw * (float)g_splash.mark.height / g_splash.mark.width;
-        DrawTexturePro(g_splash.mark,
-                       Rectangle{0, 0, (float)g_splash.mark.width,
-                                 (float)g_splash.mark.height},
-                       Rectangle{box.x + 110, box.y + 30, mw, mh}, Vector2{0, 0}, 0,
-                       SN_EDGE);
-    }
-
-    sn_text_spaced(&a.ui, SN_F_TITLE, SN_NAME, box.x + 110, box.y + 62, SN_TEXT);
-    sn_text(&a.ui, SN_F_SMALL, "version " SN_VERSION, box.x + 112, box.y + 96, SN_DIM);
-
-    sn_divider(box.x + 26, box.y + 132, box.width - 52);
-
-    /* The bar is thin and the phase is spelled out beside it. A bar on its own
-     * says how long; the words say what for, which is the part that tells you
-     * it is alive rather than stuck. */
-    Rectangle bar = {box.x + 26, box.y + 168, box.width - 52, 6};
-    sn_progress(bar, frac, SN_ACCENT);
-    sn_text(&a.ui, SN_F_TINY, phase, box.x + 26, box.y + 146, SN_DIM);
-
     EndDrawing();
-}
-
-void splashDone()
-{
-    if (g_splash.mark.id) UnloadTexture(g_splash.mark);
-    if (g_splash.icon.id) UnloadTexture(g_splash.icon);
-    g_splash = Splash{};
 }
 
 } /* namespace */
@@ -1345,22 +1643,24 @@ static int run(int argc, char **argv)
     InitWindow(1280, 760, SN_NAME " " SN_VERSION);
     mark("window + GL");
     SetWindowMinSize(900, 560);
+
+    /* File and Edit, on the platforms that have a bar to put them in. After
+     * InitWindow because on macOS that is what creates the NSApplication and
+     * the menu bar this inserts into; before it there is nothing there. */
+    sn_appmenu_install();
     SetExitKey(KEY_NULL);            /* Escape clears the selection */
 
-    /* The font before anything else, because the splash writes with it and
-     * the splash is what covers everything after this line. It costs a
-     * millisecond and a half. */
+    /* The font before anything else. Everything this program draws is drawn
+     * with it, and it costs a millisecond and a half. */
     App a;
     sn_ui_init(&a.ui);
     mark("font");
-    splashInit(a);
-    splashDraw(a, "starting", 0.15f);
+    first_frame();
     mark("first frame");
 
     emit("  ... opening an audio device\n");
     InitAudioDevice();
     mark("audio");
-    splashDraw(a, "sound", 0.35f);
 
     {
         /* Four sizes rather than one: a window manager picks the nearest and
@@ -1390,8 +1690,6 @@ static int run(int argc, char **argv)
     }
     mark("icons");
 
-    splashDraw(a, "decoders", 0.55f);
-
     a.proj = newProject();
     a.hist.reset(a.proj);
     a.player.start();
@@ -1408,11 +1706,6 @@ static int run(int argc, char **argv)
                 i++;
             continue;
         }
-        /* Named before it is opened, not after: probing a file on a slow
-         * disk is the one part of startup that can take real time, and the
-         * name of the file it is working on is the difference between a
-         * progress bar and an answer. */
-        splashDraw(a, GetFileName(argv[i]), 0.7f);
         doImport(a, argv[i], true);
     }
     /* The playhead ends up past the last import; the point of opening a file
@@ -1429,8 +1722,6 @@ static int run(int argc, char **argv)
 
     mark("files named");
 
-    splashDraw(a, "ready", 1.0f);
-    splashDone();
     timing_report();
 
     int frames = 0;
@@ -1558,6 +1849,7 @@ static int run(int argc, char **argv)
         switch (a.modal) {
         case MODAL_EXPORT: exportDialog(a); break;
         case MODAL_LAYOUT: layoutDialog(a); break;
+        case MODAL_TEXT:   textDialog(a); break;
         case MODAL_CANVAS: canvasDialog(a); break;
         case MODAL_INFO: infoWindow(a); break;
         case MODAL_CONFIRM: confirmDialog(a); break;
@@ -1602,6 +1894,12 @@ static int run(int argc, char **argv)
         EndDrawing();
 
         keys(a);
+
+        /* After EndDrawing, beside keys(), because that is where the events
+         * this drains have just arrived: EndDrawing polls, AppKit dispatches
+         * the menu action during the poll, and acting on it here means the
+         * project changes between frames rather than under one. */
+        appmenu(a);
     }
 
     /* --- shutdown --- */

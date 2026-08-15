@@ -43,6 +43,7 @@ extern Color SN_VISOR;
  * dark enough that white-ish text sits on them legibly. */
 extern Color SN_CLIP_V, SN_CLIP_V_HI, SN_CLIP_V_EDGE;
 extern Color SN_CLIP_A, SN_CLIP_A_HI, SN_CLIP_A_EDGE;
+extern Color SN_CLIP_T, SN_CLIP_T_HI, SN_CLIP_T_EDGE;
 
 #define SN_RADIUS 3
 #define SN_PAD    8
@@ -177,7 +178,7 @@ typedef enum {
     SN_I_EXPORT, SN_I_UNDO, SN_I_REDO, SN_I_EYE, SN_I_EYE_OFF, SN_I_SPEAKER,
     SN_I_MUTE, SN_I_LOCK, SN_I_UNLOCK, SN_I_ZOOM_IN, SN_I_ZOOM_OUT, SN_I_FIT,
     SN_I_LINK, SN_I_UNLINK, SN_I_INFO, SN_I_X, SN_I_CHECK, SN_I_SNAP,
-    SN_I_UP, SN_I_DOWN, SN_I_CROP, SN_I_LOOP
+    SN_I_UP, SN_I_DOWN, SN_I_CROP, SN_I_LOOP, SN_I_TEXT
 } sn_icon;
 
 void sn_draw_icon(sn_icon which, Rectangle r, Color c);

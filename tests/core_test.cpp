@@ -14,6 +14,7 @@
 #include "sn_media.h"
 #include "sn_project.h"
 #include "sn_render.h"
+#include "sn_text.h"
 #include "sn_timeline.h"
 
 #include <algorithm>
@@ -551,6 +552,79 @@ static void test_render()
     CHECK(f.valid(), "past the end still returns a frame");
     CHECK(f.rgba[0] == 0 && f.rgba[1] == 0 && f.rgba[2] == 0, "and it is black");
 
+    /* --- a caption on the picture ---
+     *
+     * A text track is composited with the video ones, in list order, which is
+     * what makes a caption something that can be put behind one layer and in
+     * front of another. Here it goes in front, so it must change the frame.
+     *
+     * Every check is the same frame with the text track muted against it
+     * unmuted, rather than against a colour that ought to be unique. It is
+     * not: the first version of this looked for magenta pixels, and testsrc2
+     * is colour bars, one of which is magenta. Muting is also exactly the
+     * question being asked - does the caption draw - so it tests muting for
+     * free rather than needing its own case.
+     */
+    {
+        const int ti = sn::addTrack(p, sn::TRACK_TEXT);
+        CHECK(ti >= 0, "a text track can be added");
+        CHECK(p.tracks[ti].kind == sn::TRACK_TEXT, "and is one");
+        CHECK(sn::visualTrack(p.tracks[ti].kind), "and is in the visual band");
+
+        sn::Clip cap;
+        cap.id = p.newId();
+        cap.in = 0.0;
+        cap.out = 4.0;
+        cap.pos = 0.0;
+        cap.text.text = "HELLO";
+        cap.text.size = 0.5;
+        cap.text.fill = 0xff00ffffu;
+        cap.text.outlineWidth = 0.0;
+        CHECK(sn::addClip(p, ti, cap) != nullptr, "and holds a caption");
+
+        auto frame = [&](double t, bool on) {
+            p.tracks[ti].muted = !on;
+            sn::VideoFrame f;
+            r.videoAt(t, 160, 90, &f);
+            return f.rgba;
+        };
+        auto differing = [](const std::vector<uint8_t> &x,
+                            const std::vector<uint8_t> &y) {
+            int n = 0;
+            for (size_t i = 0; i + 3 < x.size() && i + 3 < y.size(); i += 4)
+                if (x[i] != y[i] || x[i + 1] != y[i + 1] || x[i + 2] != y[i + 2]) n++;
+            return n;
+        };
+
+        const std::vector<uint8_t> off1 = frame(1.0, false);
+        const std::vector<uint8_t> on1 = frame(1.0, true);
+        const int drew = differing(off1, on1);
+        CHECK(drew > 0, "the caption changed the frame, %d pixels", drew);
+
+        /* And in its own colour - counted only among the pixels it changed,
+         * so the colour bars underneath cannot answer for it. */
+        int mine = 0;
+        for (size_t i = 0; i + 3 < on1.size(); i += 4) {
+            if (off1[i] == on1[i] && off1[i + 1] == on1[i + 1] &&
+                off1[i + 2] == on1[i + 2])
+                continue;
+            if (on1[i] > 200 && on1[i + 1] < 60 && on1[i + 2] > 200) mine++;
+        }
+        CHECK(mine > 0, "in the colour it was given, %d pixels", mine);
+
+        /* Past the end of the caption there is no caption, so muting it
+         * changes nothing at all. */
+        const std::vector<uint8_t> off6 = frame(6.0, false);
+        const std::vector<uint8_t> on6 = frame(6.0, true);
+        CHECK(differing(off6, on6) == 0, "and nothing is drawn after it ends");
+
+        /* The last text track comes out again, unlike the last video or audio
+         * one: a project with no captions in it is an ordinary project. */
+        CHECK(sn::removeTrack(p, ti), "and the last text track can be removed");
+        for (const sn::Track &x : p.tracks)
+            CHECK(x.kind != sn::TRACK_TEXT, "leaving none behind");
+    }
+
     /* The mix has sound where a clip is and silence where none is. */
     std::vector<float> mix(1024 * sn::CHANS);
     r.audioAt(2.0, 1024, mix.data());
@@ -574,6 +648,41 @@ static void test_render()
     double full = 0;
     for (float v : mix) full += v * v;
     CHECK(faded < full * 0.5, "a fade at its midpoint is quieter, %f vs %f", faded, full);
+
+    /* The track's level multiplies the clip's. Half the level is a quarter of
+     * the energy, which is the arithmetic and is also the check: a fader
+     * wired to the wrong side of the sum, or applied twice, misses it.
+     *
+     * Two blocks per reading, not one. Asking the mixer for the same second
+     * twice does not hand back the same block: the source keeps a fifo of
+     * whatever the last decoded frame had left over, so consecutive reads at
+     * one time alternate between two phases of it - about 5.2 and 7.8 here.
+     * One block against one block is a coin toss over whether the two
+     * readings came from the same phase, and the pair covers both either way.
+     * The fade check above sidesteps the same thing by reading an extra time
+     * and throwing it away. */
+    auto energy2 = [&]() {
+        double sum = 0;
+        for (int k = 0; k < 2; k++) {
+            r.audioAt(1.0, 1024, mix.data());
+            for (float v : mix) sum += v * v;
+        }
+        return sum;
+    };
+
+    p.tracks[1].gain = 1.0;
+    const double unity = energy2();
+    p.tracks[1].gain = 0.5;
+    const double halved = energy2();
+    CHECK(NEAR(halved, unity * 0.25, unity * 0.02),
+          "a track at half level is a quarter of the energy, %f vs %f", halved,
+          unity * 0.25);
+
+    p.tracks[1].gain = 0.0;
+    e = energy2();
+    CHECK(e == 0.0, "and all the way down is silence");
+
+    p.tracks[1].gain = 1.0;
 }
 
 /* ------------------------------------------------------------------ *
@@ -591,9 +700,40 @@ static void test_project()
 
     sn::placeItem(p, a, 1.0);
     sn::splitAt(p, 3.0);
-    p.tracks[1].clips[0].gain = 0.5;
-    p.tracks[0].clips[0].fadeOut = 0.4;
+
+    /* A text track goes into the visual band, which is in front of the audio
+     * one in the list - so it moves the audio track's index. Everything below
+     * looks tracks up by kind rather than by the number they used to be. */
+    const int ti = sn::addTrack(p, sn::TRACK_TEXT);
+    int vi = -1, ai = -1;
+    for (size_t i = 0; i < p.tracks.size(); i++) {
+        if (p.tracks[i].kind == sn::TRACK_VIDEO && vi < 0) vi = (int)i;
+        if (p.tracks[i].kind == sn::TRACK_AUDIO && ai < 0) ai = (int)i;
+    }
+    CHECK(vi >= 0 && ai >= 0 && ti >= 0, "video, audio and text tracks to save");
+
+    p.tracks[ai].clips[0].gain = 0.5;
+    p.tracks[ai].gain = 0.75;
+    p.tracks[vi].clips[0].fadeOut = 0.4;
     p.name = "a test";
+
+    /* A caption, with something in every field that could be dropped. */
+    sn::Clip cap;
+    cap.id = p.newId();
+    cap.in = 0.0;
+    cap.out = 2.5;
+    cap.pos = 1.25;
+    cap.text.text = "two \\ lines\nand a backslash";
+    cap.text.size = 0.123;
+    cap.text.x = -0.4;
+    cap.text.y = 0.6;
+    cap.text.rotation = -7.5;
+    cap.text.fill = 0x11223344u;
+    cap.text.outline = 0x55667788u;
+    cap.text.outlineWidth = 0.075;
+    cap.text.align = 2;
+    cap.text.lineSpacing = 1.4;
+    sn::addClip(p, ti, cap);
 
     const std::string path = "media/test.bencsnip";
     CHECK(sn::saveProject(p, path, &err), "save: %s", err.c_str());
@@ -604,10 +744,36 @@ static void test_project()
     CHECK(q.bin.size() == p.bin.size(), "the bin came back");
     CHECK(q.tracks.size() == p.tracks.size(), "the tracks came back");
     CHECK(NEAR(q.duration(), p.duration(), 1e-6), "the duration is the same");
-    CHECK(q.tracks[0].clips.size() == p.tracks[0].clips.size(), "the cuts came back");
-    CHECK(NEAR(q.tracks[1].clips[0].gain, 0.5, 1e-4), "so did the gain");
-    CHECK(NEAR(q.tracks[0].clips[0].fadeOut, 0.4, 1e-4), "and the fade");
+    CHECK(q.tracks[vi].clips.size() == p.tracks[vi].clips.size(), "the cuts came back");
+    CHECK(NEAR(q.tracks[ai].clips[0].gain, 0.5, 1e-4), "so did the gain");
+    CHECK(NEAR(q.tracks[ai].gain, 0.75, 1e-4), "and the track's own level");
+    CHECK(NEAR(q.tracks[vi].gain, 1.0, 1e-9),
+          "a track nobody touched comes back at unity, got %f", q.tracks[vi].gain);
+    CHECK(NEAR(q.tracks[vi].clips[0].fadeOut, 0.4, 1e-4), "and the fade");
     CHECK(!q.dirty, "a project just loaded is not dirty");
+
+    /* The caption, field by field. The string is the one that matters most:
+     * it is the only thing in this format that is escaped, and a newline or a
+     * backslash coming back wrong would be a project that silently changes
+     * what it says. */
+    CHECK(ti < (int)q.tracks.size() && q.tracks[ti].kind == sn::TRACK_TEXT,
+          "the text track came back as a text track");
+    if (ti < (int)q.tracks.size() && !q.tracks[ti].clips.empty()) {
+        const sn::TextStyle &g = q.tracks[ti].clips[0].text;
+        CHECK(g.text == cap.text.text, "the words came back: '%s'", g.text.c_str());
+        CHECK(g.text.find('\n') != std::string::npos, "with the line break in them");
+        CHECK(g.text.find('\\') != std::string::npos, "and the backslash");
+        CHECK(NEAR(g.size, 0.123, 1e-6), "the size");
+        CHECK(NEAR(g.x, -0.4, 1e-6) && NEAR(g.y, 0.6, 1e-6), "the position");
+        CHECK(NEAR(g.rotation, -7.5, 1e-6), "the rotation");
+        CHECK(g.fill == 0x11223344u && g.outline == 0x55667788u, "both colours");
+        CHECK(NEAR(g.outlineWidth, 0.075, 1e-6), "the outline width");
+        CHECK(g.align == 2, "the alignment");
+        CHECK(NEAR(g.lineSpacing, 1.4, 1e-6), "the line spacing");
+        CHECK(g == cap.text, "and nothing else drifted");
+    } else {
+        CHECK(false, "the caption did not come back at all");
+    }
 
     remove(path.c_str());
 }
@@ -907,11 +1073,140 @@ static void test_export()
     }
 }
 
+/* ------------------------------------------------------------------ *
+ * Text
+ *
+ * Needs no media and no ffmpeg: the font is compiled into the library, which
+ * is the whole reason the embedded assets moved into the core. So this runs
+ * on a machine with an empty media/ directory, which the rest of these do not.
+ * ------------------------------------------------------------------ */
+
+static void test_text()
+{
+    printf("text\n");
+
+    const int W = 320, H = 180;
+    std::vector<uint8_t> c((size_t)W * H * 4, 0);
+    for (size_t i = 0; i < (size_t)W * H; i++) c[i * 4 + 3] = 255;
+
+    auto lit = [&]() {
+        int n = 0;
+        for (size_t i = 0; i < (size_t)W * H; i++)
+            if (c[i * 4] || c[i * 4 + 1] || c[i * 4 + 2]) n++;
+        return n;
+    };
+    auto clear = [&]() {
+        std::fill(c.begin(), c.end(), (uint8_t)0);
+        for (size_t i = 0; i < (size_t)W * H; i++) c[i * 4 + 3] = 255;
+    };
+
+    /* Nothing to draw is false, and leaves the canvas alone. */
+    sn::TextStyle none;
+    CHECK(!sn::drawText(none, c.data(), W, H), "empty text draws nothing");
+    CHECK(lit() == 0, "and puts no pixels down");
+
+    /* Something to draw is true, and puts white where it said it would. */
+    sn::TextStyle st;
+    st.text = "Hi";
+    st.size = 0.4;
+    st.fill = 0xffffffffu;
+    st.outlineWidth = 0.0;
+    CHECK(sn::drawText(st, c.data(), W, H), "text draws");
+    const int plain = lit();
+    CHECK(plain > 0, "and lights pixels, got %d", plain);
+
+    /* An outline is more pixels than no outline, and none of the extra ones
+     * are the fill colour - which is what catches an outline drawn over the
+     * letter instead of under it. */
+    clear();
+    sn::TextStyle out = st;
+    out.outline = 0xff0000ffu;
+    out.outlineWidth = 0.25;
+    CHECK(sn::drawText(out, c.data(), W, H), "outlined text draws");
+    const int outlined = lit();
+    CHECK(outlined > plain, "an outline covers more, %d vs %d", outlined, plain);
+
+    int red = 0, white = 0;
+    for (size_t i = 0; i < (size_t)W * H; i++) {
+        const uint8_t *p = &c[i * 4];
+        if (p[0] > 200 && p[1] < 60 && p[2] < 60) red++;
+        if (p[0] > 200 && p[1] > 200 && p[2] > 200) white++;
+    }
+    CHECK(red > 0, "the outline colour is on the canvas, got %d", red);
+    CHECK(white > 0, "and the fill is still on top of it, got %d", white);
+
+    /* Alpha fades it the way a clip's fade does. */
+    clear();
+    sn::drawText(st, c.data(), W, H, 0.25);
+    int bright = 0;
+    for (size_t i = 0; i < (size_t)W * H; i++)
+        if (c[i * 4] > 200) bright++;
+    CHECK(bright == 0, "a quarter alpha leaves nothing at full brightness, got %d", bright);
+    CHECK(lit() > 0, "but it is still there");
+
+    /* --- the box --- */
+    double k[8], k2[8];
+    CHECK(sn::textBox(st, W, H, k), "the box is reported");
+
+    const double bw = k[2] - k[0], bh = k[5] - k[1];
+    CHECK(bw > 0 && bh > 0, "and has a size, %f x %f", bw, bh);
+
+    sn::TextStyle right = st;
+    right.x = 0.9;
+    CHECK(sn::textBox(right, W, H, k2), "the box moves with x");
+    CHECK(k2[0] > k[0], "to the right, %f vs %f", k2[0], k[0]);
+
+    /* Rotation tilts it: the top edge stops being level. */
+    sn::TextStyle spun = st;
+    spun.rotation = 30.0;
+    CHECK(sn::textBox(spun, W, H, k2), "a rotated box is reported");
+    CHECK(std::fabs(k2[3] - k2[1]) > 1.0, "and its top edge is not level, %f vs %f",
+          k2[1], k2[3]);
+
+    /* A font that is not there falls back and says so, rather than drawing
+     * nothing and leaving somebody to wonder where the caption went. */
+    sn::TextStyle gone = st;
+    gone.font = "/definitely/not/a/font.ttf";
+    clear();
+    CHECK(sn::drawText(gone, c.data(), W, H), "a missing font still draws");
+    CHECK(lit() > 0, "in the embedded face");
+    CHECK(sn::textMissingFont(gone), "and reports that it fell back");
+    CHECK(!sn::textMissingFont(st), "while the embedded face is not a fallback");
+
+    /* Two lines are taller than one. */
+    sn::TextStyle two = st;
+    two.text = "Hi\nHi";
+    double k3[8];
+    CHECK(sn::textBox(two, W, H, k3), "a second line is measured");
+    CHECK((k3[5] - k3[1]) > bh * 1.5, "and is most of twice as tall, %f vs %f",
+          k3[5] - k3[1], bh);
+
+    /* Whatever this machine has. Not required to be more than none - a
+     * container with no fonts installed is a legal place to run the tests -
+     * but everything it does report has to be usable. */
+    const std::vector<sn::FontEntry> &fonts = sn::systemFonts();
+    printf("  (%d system fonts on this machine)\n", (int)fonts.size());
+    bool named = true;
+    for (const sn::FontEntry &f : fonts)
+        if (f.name.empty() || f.path.empty()) named = false;
+    CHECK(named, "every font found has a name and a path");
+
+    if (!fonts.empty()) {
+        sn::TextStyle sys = st;
+        sys.font = fonts[0].path;
+        clear();
+        CHECK(sn::drawText(sys, c.data(), W, H), "a system font draws");
+        CHECK(!sn::textMissingFont(sys), "and is not a fallback: %s",
+              fonts[0].name.c_str());
+    }
+}
+
 int main()
 {
     printf("BENCsnip core tests\n\n");
 
     test_timeline();
+    test_text();
 
     if (have(V1) && have(V2) && have(A1)) {
         test_media();

@@ -35,6 +35,7 @@ else
 endif
 
 CORE_SRC := src/core/sn_media.cpp \
+            src/core/sn_text.cpp \
             src/core/sn_render.cpp \
             src/core/sn_timeline.cpp \
             src/core/sn_project.cpp \
@@ -56,10 +57,27 @@ GUI_SRC  := src/gui/main.cpp \
             src/gui/sn_player.cpp \
             src/gui/sn_tarr.cpp \
             src/gui/sn_filedlg.cpp \
+            src/gui/sn_appmenu.cpp \
             src/gui/sn_dialog.cpp \
             src/gui/sn_peaks.cpp
 GUI_OBJ  := $(GUI_SRC:.cpp=.o)
 GUI      := bencsnip$(EXE)
+
+# The macOS file panels and menu bar are Objective-C++, because they are AppKit
+# calls rather than a program to run - see the top of sn_filedlg_mac.mm. Only
+# these are, and only on Darwin; the .cpp beside each holds the other two
+# platforms and compiles to nothing on this one.
+ifeq ($(UNAME_S),Darwin)
+  GUI_MM  := src/gui/sn_filedlg_mac.mm \
+             src/gui/sn_appmenu_mac.mm
+  GUI_OBJ += $(GUI_MM:.mm=.o)
+  # NSOpenPanel and NSSavePanel are AppKit. raylib asks for the Cocoa umbrella,
+  # which covers it, but only when raylib was found somewhere that sets RL_SYS
+  # - a pkg-config raylib leaves that empty and the link then fails on the
+  # panels with nothing saying which framework they came from. Named here so it
+  # holds however raylib was found, the way -lcomdlg32 does on Windows.
+  MAC_LIBS := -framework AppKit
+endif
 
 PROBE_SRC := tools/probe.cpp
 PROBE_OBJ := $(PROBE_SRC:.cpp=.o)
@@ -70,10 +88,10 @@ TEST_OBJ := $(TEST_SRC:.cpp=.o)
 TEST     := bencsnip-test$(EXE)
 
 # ------------------------------------------------------------------
-# Assets live in the binary, not beside it - see src/gui/sn_embed.h.
+# Assets live in the binary, not beside it - see src/core/sn_embed.h.
 # ------------------------------------------------------------------
-EMBED    := src/gui/sn_embed.c
-EMBED_OBJ:= src/gui/sn_embed.o
+EMBED    := src/core/sn_embed.c
+EMBED_OBJ:= src/core/sn_embed.o
 EMBED_IN := assets/fonts/TerminusTTF.ttf \
             assets/brand/BENCO_Logo_Terminal.png \
             assets/icon/icon-16.png \
@@ -83,7 +101,7 @@ EMBED_IN := assets/fonts/TerminusTTF.ttf \
             assets/fonts/OFL.txt \
             LICENSE \
             NOTICE
-GUI_OBJ  += $(EMBED_OBJ) $(PROBE_IN_GUI_OBJ)
+GUI_OBJ  += $(PROBE_IN_GUI_OBJ)
 
 $(PROBE_IN_GUI_OBJ): $(PROBE_IN_GUI)
 	$(CC) $(CFLAGS) -DSN_GLPROBE_EMBEDDED -c $< -o $@
@@ -232,7 +250,7 @@ endif
 # Everywhere but the Windows-with-packaged-ffmpeg case, this is just FF_LIBS.
 FF_LINK ?= $(FF_LIBS)
 
-LDLIBS_GUI := $(RL_LIBS) $(RL_SYS) $(FF_LINK) $(WIN_LIBS)
+LDLIBS_GUI := $(RL_LIBS) $(RL_SYS) $(FF_LINK) $(WIN_LIBS) $(MAC_LIBS)
 
 .PHONY: all gui core test probe clean info check-deps
 
@@ -248,12 +266,21 @@ core: $(CORE_LIB)
 %.o: %.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(RL_CFLAGS) -c $< -o $@
 
+# -fno-objc-arc is the default and is said out loud because the file is written
+# for it: the panels are autoreleased class methods held only for the length of
+# one @autoreleasepool, and nothing in there is retained or released by hand.
+%.o: %.mm
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(RL_CFLAGS) -fno-objc-arc -c $< -o $@
+
 $(CORE_OBJ) $(GUI_OBJ) $(PROBE_OBJ) $(TEST_OBJ): $(FF_STAMP)
 
 $(CORE_OBJ): %.o: %.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
-$(CORE_LIB): $(CORE_OBJ)
+# The embedded assets go in the core library rather than beside the GUI's
+# objects, because the font is now one of them and the renderer draws text
+# with it. A headless render - which is what `make test` is - has to have it.
+$(CORE_LIB): $(CORE_OBJ) $(EMBED_OBJ)
 	$(AR) rcs $@ $^
 
 mkembed$(EXE): tools/mkembed.c
@@ -318,12 +345,12 @@ info:
 	@echo "  ffmpeg libs  = $(FF_LIBS)"
 
 clean:
-	rm -f $(CORE_OBJ) $(GUI_OBJ) $(PROBE_OBJ) $(TEST_OBJ) $(GUI_RES) \
+	rm -f $(CORE_OBJ) $(GUI_OBJ) $(EMBED_OBJ) $(PROBE_OBJ) $(TEST_OBJ) $(GUI_RES) \
 	      $(CORE_LIB) $(GUI) $(PROBE) $(TEST) mkembed$(EXE) $(EMBED) \
 	      src/core/*.d src/gui/*.d tools/*.d tests/*.d $(FF_STAMP)
 
 -include $(CORE_SRC:.cpp=.d) $(GUI_SRC:.cpp=.d) $(PROBE_SRC:.cpp=.d) \
-         $(TEST_SRC:.cpp=.d) src/gui/sn_embed.d
+         $(TEST_SRC:.cpp=.d) $(GUI_MM:.mm=.d) src/core/sn_embed.d
 
 # ------------------------------------------------------------------
 # Test media. Three small files covering the cases that matter: an mp4 with

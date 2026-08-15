@@ -43,13 +43,17 @@ enum DragKind {
     DRAG_SCRUB,       /* the playhead, from the ruler           */
     DRAG_FROM_BIN,    /* a bin item on its way to the timeline  */
     DRAG_LAYER,       /* a track's picture, moved on the preview */
-    DRAG_LAYER_SIZE   /* ...and resized by one of its handles    */
+    DRAG_LAYER_SIZE,  /* ...and resized by one of its handles    */
+    DRAG_TEXT,        /* a caption, moved on the preview         */
+    DRAG_TEXT_SIZE,   /* ...resized by a corner                  */
+    DRAG_TEXT_ROT     /* ...turned by the handle above it        */
 };
 
 enum Modal {
     MODAL_NONE = 0,
     MODAL_EXPORT,
     MODAL_LAYOUT,     /* one track's size, position and crop        */
+    MODAL_TEXT,       /* what a caption says and how it looks       */
     MODAL_CANVAS,     /* the project's own size and frame rate      */
     MODAL_INFO,
     MODAL_OPEN,       /* the file browser, importing            */
@@ -94,6 +98,12 @@ struct App {
     Vector2 dragFrom = {0, 0};
     bool dragMoved = false;
 
+    /* Which track's level fader is being dragged, or -1. It is not one of the
+     * drags above because the fader is a widget and does its own dragging;
+     * this is here only so the undo history gets one entry for the adjustment
+     * rather than one for every pixel of it. */
+    int gainTrack = -1;
+
     /* --- the preview --- */
     Texture2D preview = {};
     int previewW = 0, previewH = 0;
@@ -116,6 +126,22 @@ struct App {
      * the preview - the same number, so opening the window from a selection
      * needs no extra state. */
     int layoutTrack = -1;
+
+    /* --- captions ---
+     *
+     * Which one the text window is about. Not a second selection: it is set
+     * from `sel` whenever a caption is picked, on the timeline or on the
+     * canvas, so there is one idea of what is selected and the two panes
+     * cannot disagree about it.
+     *
+     * `textGrab` is the style as it was when a drag started, so that moving,
+     * resizing and turning all work from where the caption was rather than
+     * from where it got to on the previous frame - which is how a drag
+     * accumulates rounding until the thing being dragged drifts. */
+    ClipRef textClip;
+    TextStyle textGrab;
+    int textHandle = -1;      /* 0..3 clockwise from the top left     */
+    double textRotGrab = 0.0; /* the pointer's angle when it started  */
 
     /* Which handle of the selected layer is being dragged: 0..7 clockwise
      * from the top left, -1 when the body is being moved. */
@@ -182,6 +208,7 @@ const char *tarrLine(int which);
 /* --- modals --- */
 void exportDialog(App &a);
 void layoutDialog(App &a);          /* one track's size, position and crop */
+void textDialog(App &a);            /* what a caption says and how it looks */
 void canvasDialog(App &a);          /* the project's own size and rate     */
 void exportDialogPrepare(App &a);   /* call as the dialog opens */
 /* The project was renamed: the suggested output filename follows it, unless

@@ -4,6 +4,8 @@
 
 #include "sn_render.h"
 
+#include "sn_text.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -41,6 +43,7 @@ void Renderer::reset()
     m_open.clear();
     m_failed.clear();
     m_layers.clear();
+    m_text.clear();
 }
 
 Source *Renderer::source(int itemId)
@@ -122,10 +125,26 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
      * sn_timeline.h. */
     for (size_t ti = 0; ti < m_p->tracks.size(); ti++) {
         const Track &tr = m_p->tracks[ti];
-        if (tr.kind != TRACK_VIDEO || tr.muted) continue;
+        if (!visualTrack(tr.kind) || tr.muted) continue;
 
         const Clip *c = tr.at(t);
         if (!c) continue;
+
+        /* Text goes on in list order with everything else, which is what
+         * makes a caption something you can put behind one layer and in front
+         * of another rather than a thing that is always on top. */
+        if (tr.kind == TRACK_TEXT) {
+            const double g = fadeGain(*c, t);
+            if (g > 0.0 && !c->muted && !c->text.text.empty()) {
+                TextLayer &tl = m_text[tr.id];
+                if (!tl.matches(c->text, w, h)) buildTextLayer(c->text, w, h, &tl);
+                if (tl.valid()) {
+                    blitTextLayer(tl, c->text, m_canvas.data(), w, h, g);
+                    any = true;
+                }
+            }
+            continue;
+        }
 
         const BinItem *b = m_p->item(c->source);
         if (!b || !b->info.hasVideo) continue;
@@ -278,10 +297,17 @@ void Renderer::audioAt(double t, int frames, float *dst)
     const double be = t + frames / (double)RATE;
 
     for (const Track &tr : m_p->tracks) {
-        if (tr.kind != TRACK_AUDIO || tr.muted) continue;
+        /* A track pulled all the way down is skipped for the same reason a
+         * clip at zero is: what comes out is silence either way, and the
+         * decode that would produce it is the expensive part. */
+        if (tr.kind != TRACK_AUDIO || tr.muted || tr.gain == 0.0) continue;
 
         for (const Clip &c : tr.clips) {
             if (c.muted || c.gain == 0.0) continue;
+
+            /* The two levels multiply. See Track::gain. */
+            const double gain = c.gain * tr.gain;
+
             const double a = std::max(bs, c.pos);
             const double b = std::min(be, c.end());
             if (b <= a + 1e-9) continue;
@@ -307,12 +333,12 @@ void Renderer::audioAt(double t, int frames, float *dst)
             float *o = dst + (size_t)off * CHANS;
 
             if (!ramp) {
-                const float g = (float)c.gain;
+                const float g = (float)gain;
                 for (int i = 0; i < n * CHANS; i++) o[i] += m_mix[i] * g;
             } else {
                 for (int i = 0; i < n; i++) {
                     const double ts = a + i / (double)RATE;
-                    const float g = (float)(c.gain * fadeGain(c, ts));
+                    const float g = (float)(gain * fadeGain(c, ts));
                     o[i * CHANS + 0] += m_mix[i * CHANS + 0] * g;
                     o[i * CHANS + 1] += m_mix[i * CHANS + 1] * g;
                 }

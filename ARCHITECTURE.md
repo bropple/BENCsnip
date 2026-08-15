@@ -6,6 +6,7 @@
 src/core/     sn_media.*      libav: probe, decode, seek, scale, resample
               sn_timeline.*   tracks, clips, and every edit anything can make
               sn_render.*     the timeline as pictures and sound
+              sn_text.*       glyphs into pixels, for text on the picture
               sn_project.*    the .bencsnip file
               sn_export.*     the fast path and the rendering path
               sn_version.h    one place for the version number
@@ -16,14 +17,19 @@ src/gui/      sn_gui.*        theme and widget set
               sn_track.*      the timeline pane
               sn_dialog.*     export, information, confirm, file browser
               sn_filedlg.*    the platform's own open/save dialogs
+              sn_appmenu.*    the menu bar, and the list of what is in it
+              *_mac.mm        the macOS halves of those two, in Objective-C++
               sn_tarr.*       the mascot
               main.cpp        layout, keyboard, and the glue
 ```
 
 `src/core` does not include raylib, does not open a window and does not know
-what a mouse is. `make test` builds and runs it on a machine with no screen and
-no sound card, which is what keeps that rule honest. Everything a headless
-render would need is already there.
+what a mouse is. It does now rasterise text, with a vendored stb_truetype -
+because the exporter has to draw the same captions the preview does, and the
+moment those are two pieces of code they are two answers. `make test` builds
+and runs it on a machine with no screen and no sound card, which is what keeps
+that rule honest. Everything a headless render would need is already there —
+including the font, which is why the embedded assets live in `src/core`.
 
 ## Time
 
@@ -61,6 +67,20 @@ the project's size moves nothing. It is per track rather than per clip because
 what it is for is a layout — a small video in the corner of a big one, two
 side by side — and a layout that changed halfway through a track would be a
 different feature with a different interface.
+
+An audio track carries a level of its own, which multiplies the level on each
+of its clips: a clip at half on a track at half is a quarter. Same range and
+same meaning as the clip's, so the two numbers read alike, and per track for
+the reason a mixer has faders — pulling a whole track down should not mean
+undoing what was set clip by clip.
+
+Text is a clip too. A caption is a `Clip` on a `TRACK_TEXT` track with `source`
+of 0 and a `TextStyle` on it — the words, the face, the size, where it sits,
+how far it is turned, two colours — so it trims, slides, splits, fades, links
+and mutes because clips already do all of that. Video and text are one *band*:
+the list has always meant two things at once, and a caption has to be able to
+sit in front of one video track and behind another, so what used to be "same
+kind" for ordering is now `sameBand`, and video and text swap freely inside it.
 
 The order of the video tracks is the compositing order, and **the top row is
 the back**. That is the opposite of the convention every other editor uses; it
@@ -128,6 +148,12 @@ would never produce. Audio sums every unmuted audio clip
 under the block, with fades evaluated per sample — a fade shorter than a block
 would otherwise be a step, and a step in a gain is a click — then clips to
 ±1.0, so an overloaded mix sounds overloaded rather than broken.
+
+Text is composited in the same list order as the pictures, from a cache of
+rasterised captions kept per text track — a track's clips do not overlap, so
+only one caption on it can be under the playhead. Building one lays out the
+glyphs and grows the outline out of them by dilation, which is expensive and
+runs when the caption changes rather than when the frame does.
 
 A Renderer owns its open files and is not thread-safe. The player thread has
 one and the exporter has its own; a decoder is a read position, and two threads

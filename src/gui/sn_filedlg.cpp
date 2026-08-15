@@ -3,10 +3,10 @@
  * See sn_filedlg.h for why this is three platform cases and not a library.
  */
 
-/* popen/pclose are POSIX, and the C++ standard alone does not declare them. */
-#if defined(__APPLE__)
-#define _DARWIN_C_SOURCE
-#elif !defined(_WIN32)
+/* popen/pclose are POSIX, and the C++ standard alone does not declare them.
+ * Only the zenity/kdialog case runs a program now - macOS calls its panels
+ * directly from sn_filedlg_mac.mm - so this is for that case alone. */
+#if !defined(_WIN32) && !defined(__APPLE__)
 #define _POSIX_C_SOURCE 200809L
 #endif
 
@@ -167,6 +167,9 @@ int sn_save_dialog(void *owner, const char *title, const char *defaultName,
  * standard output going somewhere. */
 void sn_attach_console(void) {}
 
+/* ------------------------------------------------------------------ */
+#if !defined(__APPLE__)
+
 /* Everything the command printed, up to `cap`. Returns 0 when the command
  * could not be run or printed nothing - which for these dialogs means
  * cancelled. */
@@ -215,62 +218,10 @@ int sn_open_dialog(void *owner, const char *title, const char *startDir,
 {
     char cmd[2048], pat[512];
 
-    (void)owner; /* X11 and Cocoa parent these dialogs themselves */
+    (void)owner; /* X11 parents these dialogs itself */
     if (!out || cap < 2) return SN_DLG_CANCELLED;
     if (!startDir) startDir = ".";
 
-#if defined(__APPLE__)
-    (void)filterDesc;
-    (void)pat;
-    /* AppleScript's `choose file` takes extensions and greys out the rest,
-     * the way a native open panel does. It raises an error on cancel, so
-     * stderr is dropped and an empty read means cancelled.
-     *
-     * `default location` needs a real, absolute directory. Every caller here
-     * passes ".", and `POSIX file "."` is not something AppleScript will
-     * make a file out of - it raises, the error goes to the dropped stderr,
-     * and the whole thing reads as a dialog that silently refused to open.
-     * Which is exactly what it did. */
-    char here[1024];
-    const char *dir = realpath(startDir, here) ? here : nullptr;
-
-    /* An app launched from the Finder starts in "/", so a working directory
-     * is not a useful place to open a file browser. Somebody's own folder is.
-     */
-    if (!dir || (dir[0] == '/' && dir[1] == 0)) {
-        const char *home = getenv("HOME");
-        dir = home && *home ? home : nullptr;
-    }
-
-    char loc[1100] = {0};
-    if (dir) snprintf(loc, sizeof loc, " default location POSIX file \"%s\"", dir);
-
-    char types[512];
-    size_t n = 0;
-    const char *s = exts;
-    while (*s && n + 8 < sizeof types) {
-        while (*s == ' ') s++;
-        if (!*s) break;
-        n += (size_t)snprintf(types + n, sizeof types - n, "%s\"", n ? ", \"" : "\"");
-        while (*s && *s != ' ' && n + 2 < sizeof types) types[n++] = *s++;
-        types[n++] = '"';
-        types[n] = 0;
-    }
-    /* `tell me to activate` first, so the panel comes up in front of the
-     * window that asked for it. Without it the dialog belongs to a process
-     * with no presence on screen and can open behind everything - which looks
-     * the same as not opening, except the program is also unresponsive
-     * waiting for an answer nobody can see. */
-    snprintf(cmd, sizeof cmd,
-             "osascript -e 'tell me to activate' "
-             "-e 'set r to (choose file with prompt \"%s\" of type {%s}%s%s)' "
-             "-e 'set o to \"\"' "
-             "-e 'repeat with f in (r as list)' "
-             "-e 'set o to o & POSIX path of f & linefeed' "
-             "-e 'end repeat' -e 'o' 2>/dev/null",
-             title, types, loc, multiple ? " with multiple selections allowed" : "");
-    return read_all(cmd, out, cap) ? SN_DLG_OK : SN_DLG_CANCELLED;
-#else
     if (have("zenity")) {
         patterns(exts, pat, sizeof pat, ' ');
         snprintf(cmd, sizeof cmd,
@@ -289,7 +240,6 @@ int sn_open_dialog(void *owner, const char *title, const char *startDir,
         return read_all(cmd, out, cap) ? SN_DLG_OK : SN_DLG_CANCELLED;
     }
     return SN_DLG_UNAVAILABLE;
-#endif
 }
 
 int sn_save_dialog(void *owner, const char *title, const char *defaultName,
@@ -301,16 +251,6 @@ int sn_save_dialog(void *owner, const char *title, const char *defaultName,
     if (!out || cap < 2) return SN_DLG_CANCELLED;
     if (!defaultName) defaultName = "";
 
-#if defined(__APPLE__)
-    (void)filterDesc;
-    (void)ext;
-    snprintf(cmd, sizeof cmd,
-             "osascript -e 'tell me to activate' "
-             "-e 'POSIX path of (choose file name with prompt \"%s\" "
-             "default name \"%s\")' 2>/dev/null",
-             title, defaultName);
-    return read_all(cmd, out, cap) ? SN_DLG_OK : SN_DLG_CANCELLED;
-#else
     if (have("zenity")) {
         snprintf(cmd, sizeof cmd,
                  "zenity --file-selection --save --confirm-overwrite --title='%s' "
@@ -326,7 +266,8 @@ int sn_save_dialog(void *owner, const char *title, const char *defaultName,
         return read_all(cmd, out, cap) ? SN_DLG_OK : SN_DLG_CANCELLED;
     }
     return SN_DLG_UNAVAILABLE;
-#endif
 }
 
-#endif
+#endif /* !__APPLE__ - the panels are in sn_filedlg_mac.mm */
+
+#endif /* !_WIN32 */

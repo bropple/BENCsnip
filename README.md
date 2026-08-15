@@ -69,9 +69,23 @@ middle piece and press **Shift+Delete**. Then **Ctrl+E**.
   side by side. There are presets for the layouts anyone actually wants. The
   canvas itself — size and frame rate — is a button in the toolbar, so a
   vertical or square project is two clicks.
+* **Text on the picture.** Ctrl+T puts a caption at the playhead. Drag it
+  about on the preview, drag a corner to resize it, and drag the handle above
+  it to turn it — upright is sticky, and Shift steps by fifteen degrees. Fill
+  and outline are both yours, and it will set in any font this machine has:
+  868 turned up on the one it was written on, and there is a search box over
+  the list. A caption is a clip on a track of its own, so it trims, slides,
+  splits, fades and layers like everything else, and it reorders among the
+  video tracks by the same rule they do — move a text track to the top row and
+  the caption goes behind the picture.
+* **A level per audio track.** A fader in the track head, on top of the level
+  already on each clip, so turning a whole track of dialogue down is one
+  gesture rather than one per clip.
 * **A preview that stays in sync.** The picture is chosen to match how much
   sound the audio device has actually played, so a slow decode drops a frame
   rather than sliding the sound away from the picture.
+* **A menu bar on macOS.** File and Edit where a Mac expects them, with the
+  usual shortcuts. Windows and Linux keep the toolbar for now.
 * **Export that is honest about what it is doing.** The dialog tells you
   whether it is going to re-encode the whole timeline or copy the packets
   across untouched — and it copies whenever it can. It also says how big the
@@ -108,7 +122,7 @@ exactly what the preview showed you, because both go through the same code.
 |---|---|
 | **Space** | play / pause |
 | **S** | split every track at the playhead |
-| **Delete** | delete the selected clip |
+| **Delete** or **Backspace** | delete the selected clip — Backspace matters on a Mac, where the key is labelled delete |
 | **Shift+Delete** | delete it and close the gap |
 | **M** | mute the selected clip |
 | **← →** | one frame; hold Shift for a second |
@@ -123,6 +137,7 @@ exactly what the preview showed you, because both go through the same code.
 | **Ctrl+E** | export |
 | **Ctrl+N** | start again |
 | **Ctrl+A** | select everything |
+| **Ctrl+T** | put a caption at the playhead |
 | **Esc** | select nothing |
 | **F12** | write a screenshot beside the program |
 
@@ -136,6 +151,11 @@ There are scrollbars for both. Right-click a clip for the rest. Delete with
 nothing selected closes the gap the playhead is sitting in. Double-click the
 project's name in the toolbar to change it — the export is named after it.
 
+On the preview: drag a video layer about, or its handles to resize it, and
+double-click it for the numbers. A caption works the same way and has a handle
+above it for turning — Shift steps that by fifteen degrees — and double-clicking
+one opens the window with the words in it.
+
 ---
 
 ## Building
@@ -143,6 +163,12 @@ project's name in the toolbar to change it — the export is named after it.
 A GNU makefile, a C++17 compiler, raylib and the ffmpeg libraries. No CMake
 step, no package manager, no code generation beyond turning the font into a C
 array.
+
+The one thing that is neither installed nor linked is `vendor/stb/stb_truetype.h`,
+which is committed here: a single public-domain header, byte for byte the copy
+raylib carries, used by `src/core` to turn text overlays into pixels. It is in
+the core rather than the interface because the exporter has to draw the same
+captions the preview does, and `src/core` has no raylib to ask.
 
 ### Linux
 
@@ -342,8 +368,9 @@ camera is the thing that has to read.
 MIT — see [LICENSE](LICENSE).
 
 BENCsnip links FFmpeg (LGPL v2.1+, and GPL when built with `--enable-gpl`
-components such as libx264), raylib (zlib/libpng), and embeds Terminus (TTF)
-under the SIL Open Font License. [NOTICE](NOTICE) has the full attribution and
+components such as libx264) and raylib (zlib/libpng), vendors stb_truetype
+(public domain / MIT), and embeds Terminus (TTF) under the SIL Open Font
+License. [NOTICE](NOTICE) has the full attribution and
 what it obliges you to do when you redistribute a binary; the information
 window in the program shows the same text, which is how a binary-only copy
 satisfies the OFL.

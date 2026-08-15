@@ -16,6 +16,7 @@
 #define SN_TIMELINE_H
 
 #include "sn_media.h"
+#include "sn_text.h"
 
 #include <string>
 #include <vector>
@@ -68,11 +69,38 @@ struct Clip {
         return in + local;
     }
 
+    /* What this clip says, when it is on a text track.
+     *
+     * On a text track `source` is 0 - there is no file behind a caption - and
+     * `in` and `out` are what they always were, times that bound the clip,
+     * measured from zero because there is nothing to be an offset into. So a
+     * caption trims, slides, splits, fades and links exactly the way a piece
+     * of footage does, and none of that had to be written twice.
+     *
+     * Ignored on the other kinds. It costs a std::string on every clip in the
+     * project, which is the price of text being a clip rather than a fourth
+     * thing with its own list and its own copy of every operation. */
+    TextStyle text;
+
     bool looped() const { return repeat > 1.0001; }
     bool covers(double t) const { return t >= pos && t < end(); }
 };
 
-enum TrackKind { TRACK_VIDEO = 0, TRACK_AUDIO = 1 };
+enum TrackKind { TRACK_VIDEO = 0, TRACK_AUDIO = 1, TRACK_TEXT = 2 };
+
+/* Video and text are one band: both put something on the picture, both are
+ * composited in list order, and a caption has to be able to sit in front of
+ * one video track and behind another or it is not layered at all. Audio is
+ * the other band. The list is kept with the visual band first and the audio
+ * band after it, which is what makes the order mean one thing.
+ *
+ * Everywhere that used to ask "same kind?" about ordering asks this instead;
+ * everywhere that asks "is this the kind that makes a picture" asks it too. */
+inline bool visualTrack(TrackKind k) { return k == TRACK_VIDEO || k == TRACK_TEXT; }
+inline bool sameBand(TrackKind a, TrackKind b)
+{
+    return visualTrack(a) ? visualTrack(b) : a == b;
+}
 
 struct Track {
     int id = 0;
@@ -81,6 +109,15 @@ struct Track {
     bool muted = false;      /* audio silent / video hidden              */
     bool locked = false;     /* the mouse leaves it alone                */
     int height = 0;          /* 0 = the view's default                   */
+
+    /* The track's own level, on audio tracks, multiplied with each clip's:
+     * a clip at half on a track at half is a quarter. Same range and same
+     * meaning as Clip::gain - linear, 0 to 2, 1 is unmodified - so that the
+     * two numbers read the same way and one fader can be pulled down without
+     * anybody having to undo what was set on the clips.
+     *
+     * Ignored on video tracks, which have no sound to turn down. */
+    double gain = 1.0;
     std::vector<Clip> clips; /* kept sorted by pos, always               */
 
     /* --- where this track's picture sits on the canvas (video only) ---
@@ -185,8 +222,9 @@ Project newProject();
 /* Returns the index of the new track. */
 int addTrack(Project &p, TrackKind kind, int atIndex = -1);
 
-/* False when it is the last track of its kind - something has to be left to
- * drop a file onto. Clips on it go with it. */
+/* False when it is the last video or audio track - something has to be left
+ * to drop a file onto. Text tracks have no such floor: nothing is dropped on
+ * one, and a project with none is an ordinary project. Clips go with it. */
 bool removeTrack(Project &p, int idx);
 
 /* Swap a track with its neighbour of the same kind. Returns where it ended

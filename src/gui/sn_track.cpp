@@ -100,7 +100,7 @@ static double snap_time(App &a, double t, const ClipRef *ignore)
  * Drawing one clip
  * ------------------------------------------------------------------ */
 
-static void draw_clip(App &a, int idx, const Clip &c, bool video, bool hot)
+static void draw_clip(App &a, int idx, const Clip &c, TrackKind kind, bool hot)
 {
     sn_ui &ui = a.ui;
     Rectangle r = clip_rect(a, idx, c);
@@ -110,9 +110,13 @@ static void draw_clip(App &a, int idx, const Clip &c, bool video, bool hot)
     if (r.x > lane.x + lane.width || r.x + r.width < lane.x) return;
 
     const bool isSel = a.selected(ClipRef{idx, c.id});
-    const Color body = video ? (isSel ? SN_CLIP_V_HI : SN_CLIP_V)
-                             : (isSel ? SN_CLIP_A_HI : SN_CLIP_A);
-    const Color edge = video ? SN_CLIP_V_EDGE : SN_CLIP_A_EDGE;
+    const bool video = kind == TRACK_VIDEO;
+    const bool text = kind == TRACK_TEXT;
+
+    const Color body = text  ? (isSel ? SN_CLIP_T_HI : SN_CLIP_T)
+                      : video ? (isSel ? SN_CLIP_V_HI : SN_CLIP_V)
+                              : (isSel ? SN_CLIP_A_HI : SN_CLIP_A);
+    const Color edge = text ? SN_CLIP_T_EDGE : video ? SN_CLIP_V_EDGE : SN_CLIP_A_EDGE;
 
     BeginScissorMode((int)lane.x, (int)lane.y, (int)lane.width, (int)lane.height);
 
@@ -140,7 +144,7 @@ static void draw_clip(App &a, int idx, const Clip &c, bool video, bool hot)
             }
         }
     }
-    if (!video && r.width > 12) {
+    if (!video && !text && r.width > 12) {
         /* The real waveform, read off the file by the worker in sn_peaks.
          *
          * Every column asks what the source is playing at that moment, using
@@ -187,7 +191,7 @@ static void draw_clip(App &a, int idx, const Clip &c, bool video, bool hot)
     /* The level line: where the clip's gain sits between silence and +6 dB,
      * dragged with the mouse. Audio only - a video clip has no level, and a
      * line across it would be a control that does nothing. */
-    if (!video && r.width > 20) {
+    if (kind == TRACK_AUDIO && r.width > 20) {
         const float ly = r.y + r.height * (1.0f - (float)(c.gain * 0.5)) ;
         DrawLineEx(Vector2{r.x + 1, ly}, Vector2{r.x + r.width - 1, ly}, 1.5f,
                    Color{0xcd, 0xea, 0xb0, (unsigned char)(isSel || hot ? 220 : 120)});
@@ -248,11 +252,33 @@ static void draw_clip(App &a, int idx, const Clip &c, bool video, bool hot)
      * rather than over the picture at the head of the clip - text on top of a
      * thumbnail is readable in neither direction. */
     const BinItem *b = a.proj.item(c.source);
+
+    /* A caption says what it says, across the body of the clip rather than in
+     * the strip along the bottom: there is no thumbnail on a text clip for it
+     * to be illegible over, and the words are the one thing about it worth
+     * reading from across the timeline. Newlines become a middle dot, because
+     * a clip is one row high and a caption is the shape of what it says. */
+    if (text && r.width > 24) {
+        std::string one;
+        for (char ch : c.text.text) {
+            /* U+00B7, written out as the two bytes it is. Appending the raw
+             * 0xb7 instead is not UTF-8, and raylib draws a codepoint it
+             * cannot decode as a question mark - which is what the first
+             * version of this put in the middle of every two-line caption. */
+            if (ch == '\n') one += "\xc2\xb7";
+            else one += ch;
+        }
+        if (one.empty()) one = "(empty)";
+        sn_text_clip(&ui, SN_F_SMALL, one.c_str(), r.x + 6, r.y + 6, r.width - 12,
+                     c.text.text.empty() ? SN_EDGE : SN_TEXT);
+    }
+
     if (r.width > 46) {
         Rectangle strip = {r.x + 1, r.y + r.height - 15, r.width - 2, 14};
         DrawRectangleRec(strip, Color{0, 0, 0, 90});
 
-        sn_text_clip(&ui, SN_F_TINY, b ? b->info.name.c_str() : "?", strip.x + 4,
+        const char *nm = text ? "caption" : (b ? b->info.name.c_str() : "?");
+        sn_text_clip(&ui, SN_F_TINY, nm, strip.x + 4,
                      strip.y + 1, strip.width - (r.width > 110 ? 60 : 8), SN_TEXT);
         if (r.width > 110) {
             const std::string d = fmtTime(c.dur());
@@ -397,15 +423,18 @@ static void draw_heads(App &a)
         const int id = 3000 + (int)i * 8;
 
         /* --- reorder, top right --- */
-        const bool canUp = (int)i > 0 && a.proj.tracks[i - 1].kind == t.kind;
+        /* Its band rather than its exact kind, so a caption can be moved in
+         * front of a video track and behind another - which is the only way
+         * to say which of them is on top. */
+        const bool canUp = (int)i > 0 && sameBand(a.proj.tracks[i - 1].kind, t.kind);
         const bool canDn = i + 1 < a.proj.tracks.size() &&
-                           a.proj.tracks[i + 1].kind == t.kind;
+                           sameBand(a.proj.tracks[i + 1].kind, t.kind);
 
         Rectangle up = {h.x + h.width - 38, h.y + 3, 16, 15};
         Rectangle dn = {h.x + h.width - 20, h.y + 3, 16, 15};
 
         if (sn_icon_button(&ui, id + 2, up, SN_I_UP, canUp, 0,
-                           t.kind == TRACK_VIDEO ? "move up, which is further back"
+                           visualTrack(t.kind) ? "move up, which is further back"
                                                  : "move this track up") &&
             canUp) {
             moveTrack(a.proj, (int)i, -1);
@@ -413,12 +442,52 @@ static void draw_heads(App &a)
             a.changed();
         }
         if (sn_icon_button(&ui, id + 3, dn, SN_I_DOWN, canDn, 0,
-                           t.kind == TRACK_VIDEO ? "move down, which is further forward"
+                           visualTrack(t.kind) ? "move down, which is further forward"
                                                  : "move this track down") &&
             canDn) {
             moveTrack(a.proj, (int)i, 1);
             a.clearSel();
             a.changed();
+        }
+
+        /* --- the level, on audio tracks ---
+         *
+         * The strip between the name and the switches, which is the only room
+         * a 104 pixel header has left, and only on audio tracks: there is
+         * nothing on a video track to turn down.
+         *
+         * Same range and same snap as the level line across a clip - zero to
+         * twice, unity in the middle, and anything within a hair of unity is
+         * unity, because "back to where it was" is the adjustment made most
+         * often and a mouse cannot land on 1.000 by hand. The two multiply,
+         * which is what makes the fader worth having: one number that moves
+         * everything on the track without disturbing what was set clip by
+         * clip.
+         */
+        if (t.kind == TRACK_AUDIO) {
+            Rectangle lv = {h.x + 6, h.y + 20, h.width - 12, 12};
+            float v = (float)(t.gain * 0.5);
+
+            if (sn_slider(&ui, id + 6, lv, &v)) {
+                double g = v * 2.0;
+                if (std::fabs(g - 1.0) < 0.04) g = 1.0;
+                if (g != t.gain) {
+                    t.gain = g;
+                    a.gainTrack = (int)i;
+                    a.changed(true);
+                }
+            }
+
+            if (CheckCollisionPointRec(GetMousePosition(), lv) && !sn_ui_blocked(&ui)) {
+                /* Decibels as well as the percentage, because a fader is
+                 * read in decibels by everyone who has used one and the
+                 * percentage is what the number underneath actually is. */
+                if (t.gain <= 0.0)
+                    sn_tip(&ui, "level: silent");
+                else
+                    sn_tip(&ui, "level: %+.1f dB (%.0f%%)%s", 20.0 * std::log10(t.gain),
+                           t.gain * 100.0, t.muted ? " - and the track is muted" : "");
+            }
         }
 
         /* --- the switches, along the bottom --- */
@@ -428,7 +497,7 @@ static void draw_heads(App &a)
         Rectangle b3 = {h.x + 52, by, 20, 18};
         Rectangle b4 = {h.x + 78, by, 20, 18};
 
-        if (t.kind == TRACK_VIDEO) {
+        if (visualTrack(t.kind)) {
             if (sn_icon_button(&ui, id, b1, t.muted ? SN_I_EYE_OFF : SN_I_EYE, 1, t.muted,
                                t.muted ? "show this track" : "hide this track")) {
                 t.muted = !t.muted;
@@ -457,15 +526,20 @@ static void draw_heads(App &a)
 
         /* Only ever one of a kind left: something has to be there to drop a
          * file onto, and a delete that silently does nothing is worse than a
-         * button that says it cannot. */
+         * button that says it cannot.
+         *
+         * Text tracks have no such floor - nothing is ever dropped on one, and
+         * a project with no captions is an ordinary project - so the last one
+         * goes when it is asked to. */
         int sameKind = 0;
         for (const Track &x : a.proj.tracks)
             if (x.kind == t.kind) sameKind++;
+        const bool canDrop = t.kind == TRACK_TEXT || sameKind > 1;
 
-        if (sn_icon_button(&ui, id + 5, b4, SN_I_TRASH, sameKind > 1, 0,
-                           sameKind > 1 ? "delete this track and everything on it"
-                                        : "the last track of its kind stays") &&
-            sameKind > 1) {
+        if (sn_icon_button(&ui, id + 5, b4, SN_I_TRASH, canDrop, 0,
+                           canDrop ? "delete this track and everything on it"
+                                   : "the last track of its kind stays") &&
+            canDrop) {
             const std::string nm = t.name;
             removeTrack(a.proj, (int)i);
             a.clearSel();
@@ -473,6 +547,15 @@ static void draw_heads(App &a)
             a.say("deleted %s", nm.c_str());
             break;   /* the vector moved under us */
         }
+    }
+
+    /* One undo entry for the whole adjustment. While the fader moves the
+     * change is minor, the way a clip being dragged is; the commit happens
+     * when the button comes up, and here rather than beside the slider
+     * because sn_ui_frame has already cleared `active` by then. */
+    if (a.gainTrack >= 0 && !IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+        a.gainTrack = -1;
+        a.changed();
     }
 
     EndScissorMode();
@@ -529,7 +612,7 @@ void timelinePane(App &a, Rectangle r)
     for (size_t i = 0; i < a.proj.tracks.size(); i++) {
         Rectangle l = lane_rect(a, (int)i);
         if (l.y > r.y + r.height) break;
-        DrawRectangleRec(l, a.proj.tracks[i].kind == TRACK_VIDEO
+        DrawRectangleRec(l, visualTrack(a.proj.tracks[i].kind)
                                 ? Color{0x0e, 0x14, 0x0c, 255}
                                 : Color{0x0c, 0x12, 0x0a, 255});
         if (a.proj.tracks[i].locked)
@@ -646,7 +729,7 @@ void timelinePane(App &a, Rectangle r)
         const Track &t = a.proj.tracks[i];
         if (lane_rect(a, (int)i).y > r.y + r.height) break;
         for (const Clip &c : t.clips)
-            draw_clip(a, (int)i, c, t.kind == TRACK_VIDEO,
+            draw_clip(a, (int)i, c, t.kind,
                       overClip.track == (int)i && overClip.clip == c.id);
     }
     EndScissorMode();
@@ -765,8 +848,15 @@ void timelinePane(App &a, Rectangle r)
                 /* Dropping onto an audio track puts only the audio there;
                  * onto a video track, the pair. Which is what the pointer was
                  * pointing at. */
-                const bool audioLane = a.proj.tracks[overTrack].kind == TRACK_AUDIO;
-                placeItem(a.proj, a.dragBin, t, audioLane ? NO_TRACK : overTrack,
+                /* Dropping onto an audio track puts only the audio there.
+                 * Onto a text track, neither half belongs where it landed, so
+                 * both go wherever they would have gone anyway rather than
+                 * turning a caption track into a video one. */
+                const TrackKind lane = a.proj.tracks[overTrack].kind;
+                const bool audioLane = lane == TRACK_AUDIO;
+                const bool textLane = lane == TRACK_TEXT;
+                placeItem(a.proj, a.dragBin, t,
+                          audioLane ? NO_TRACK : textLane ? -1 : overTrack,
                           audioLane ? overTrack : -1);
                 a.changed();
                 a.say("added %s at %s", b->info.name.c_str(), fmtTime(t).c_str());
