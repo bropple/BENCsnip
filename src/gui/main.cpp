@@ -22,6 +22,7 @@
  */
 
 #include "sn_app.h"
+#include "sn_appmenu.h"
 #include "sn_embed.h"
 #include "sn_filedlg.h"
 #include "sn_version.h"
@@ -655,6 +656,109 @@ static void open_files(App &a, bool project)
     }
 }
 
+/* ------------------------------------------------------------------ *
+ * The commands
+ *
+ * Everything below is reachable from more than one place - a toolbar button,
+ * a key, and on macOS a menu - and each of those used to carry its own copy of
+ * what the command does. Which is how the toolbar's undo came to leave the
+ * player's end where it was while the keyboard's moved it: four lines written
+ * twice, and only one of the copies learned about setEnd.
+ *
+ * One function per command, then, and the callers choose which to call and
+ * nothing else. Each returns without complaint when there is nothing to do,
+ * because a menu item is clickable whether or not it applies and a caller that
+ * had to check first would be the duplication coming back in.
+ * ------------------------------------------------------------------ */
+
+static void cmd_new(App &a)
+{
+    if (a.proj.dirty) {
+        a.confirmText = "Throw away the unsaved changes?";
+        a.confirmTag = 2;
+        a.modal = MODAL_CONFIRM;
+        return;
+    }
+    a.proj = newProject();
+    a.hist.reset(a.proj);
+    a.thumbs.clear();
+    a.playhead = 0;
+    a.changed(true);
+}
+
+static void cmd_undo(App &a)
+{
+    if (!a.hist.undo(&a.proj)) return;
+    a.rev++;
+    a.sel.clear();
+    a.player.setEnd(a.proj.duration());
+    a.say("undone");
+}
+
+static void cmd_redo(App &a)
+{
+    if (!a.hist.redo(&a.proj)) return;
+    a.rev++;
+    a.sel.clear();
+    a.player.setEnd(a.proj.duration());
+    a.say("redone");
+}
+
+static void cmd_export(App &a)
+{
+    if (a.proj.duration() <= 0) return;
+    exportDialogPrepare(a);
+    a.modal = MODAL_EXPORT;
+}
+
+static void cmd_select_all(App &a)
+{
+    a.sel.clear();
+    for (size_t i = 0; i < a.proj.tracks.size(); i++)
+        for (const Clip &c : a.proj.tracks[i].clips)
+            a.sel.push_back(ClipRef{(int)i, c.id});
+    a.say("selected %d clips", (int)a.sel.size());
+}
+
+/* ------------------------------------------------------------------ *
+ * The menu bar
+ *
+ * macOS only for now - see sn_appmenu.h. Drained once a frame rather than
+ * acted on where AppKit delivers it, which is inside GLFW's event poll and
+ * therefore inside a frame that is already drawing this project.
+ * ------------------------------------------------------------------ */
+
+static void appmenu(App &a)
+{
+    for (int cmd; (cmd = sn_appmenu_take()) != SN_CMD_NONE;) {
+        /* A modal window has the screen. A menu command that reached past it
+         * would act on a timeline nobody can currently see, which is what
+         * keys() decided about the keyboard for the same reason. The pick is
+         * still taken off the queue, so it is dropped rather than saved up to
+         * fire the moment the dialog closes. */
+        if (a.modal != MODAL_NONE) continue;
+
+        switch (cmd) {
+        case SN_CMD_NEW:           cmd_new(a); break;
+        case SN_CMD_OPEN:          open_files(a, true); break;
+        case SN_CMD_IMPORT:        open_files(a, false); break;
+        case SN_CMD_SAVE:          save_project(a, false); break;
+        case SN_CMD_SAVE_AS:       save_project(a, true); break;
+        case SN_CMD_EXPORT:        cmd_export(a); break;
+
+        case SN_CMD_UNDO:          cmd_undo(a); break;
+        case SN_CMD_REDO:          cmd_redo(a); break;
+        case SN_CMD_SPLIT:         doSplit(a); break;
+        case SN_CMD_DELETE:        doDelete(a, false); break;
+        case SN_CMD_RIPPLE_DELETE: doDelete(a, true); break;
+        case SN_CMD_SELECT_ALL:    cmd_select_all(a); break;
+        case SN_CMD_DESELECT:      a.clearSel(); break;
+
+        default: break;
+        }
+    }
+}
+
 static void toolbar(App &a, Rectangle r)
 {
     sn_ui &ui = a.ui;
@@ -690,12 +794,12 @@ static void toolbar(App &a, Rectangle r)
 
     if (sn_icon_button(&ui, 13, Rectangle{x, y, bw, bh}, SN_I_UNDO, a.hist.canUndo(), 0,
                        "undo (Ctrl+Z)")) {
-        if (a.hist.undo(&a.proj)) { a.rev++; a.sel.clear(); a.say("undone"); }
+        cmd_undo(a);
     }
     x += bw + 4;
     if (sn_icon_button(&ui, 14, Rectangle{x, y, bw, bh}, SN_I_REDO, a.hist.canRedo(), 0,
                        "redo (Ctrl+Shift+Z)")) {
-        if (a.hist.redo(&a.proj)) { a.rev++; a.sel.clear(); a.say("redone"); }
+        cmd_redo(a);
     }
     x += bw + 4;
     gap();
@@ -752,12 +856,7 @@ static void toolbar(App &a, Rectangle r)
     }
 
     Rectangle exp = {info.x - 92, y, 86, bh};
-    if (sn_button_lit(&ui, 22, exp, "EXPORT", a.proj.duration() > 0)) {
-        if (a.proj.duration() > 0) {
-            exportDialogPrepare(a);
-            a.modal = MODAL_EXPORT;
-        }
-    }
+    if (sn_button_lit(&ui, 22, exp, "EXPORT", a.proj.duration() > 0)) cmd_export(a);
 
     /* --- the project's name ---
      *
@@ -834,46 +933,14 @@ static void keys(App &a)
     if (a.modal != MODAL_NONE) return;
 
     if (ctrl) {
-        if (IsKeyPressed(KEY_Z)) {
-            if (shift ? a.hist.redo(&a.proj) : a.hist.undo(&a.proj)) {
-                a.rev++;
-                a.sel.clear();
-                a.player.setEnd(a.proj.duration());
-                a.say(shift ? "redone" : "undone");
-            }
-        }
-        if (IsKeyPressed(KEY_Y) && a.hist.redo(&a.proj)) {
-            a.rev++;
-            a.sel.clear();
-            a.say("redone");
-        }
+        if (IsKeyPressed(KEY_Z)) { if (shift) cmd_redo(a); else cmd_undo(a); }
+        if (IsKeyPressed(KEY_Y)) cmd_redo(a);
         if (IsKeyPressed(KEY_S)) save_project(a, shift);
         if (IsKeyPressed(KEY_O)) open_files(a, true);
         if (IsKeyPressed(KEY_I)) open_files(a, false);
-        if (IsKeyPressed(KEY_E) && a.proj.duration() > 0) {
-            exportDialogPrepare(a);
-            a.modal = MODAL_EXPORT;
-        }
-        if (IsKeyPressed(KEY_N)) {
-            if (a.proj.dirty) {
-                a.confirmText = "Throw away the unsaved changes?";
-                a.confirmTag = 2;
-                a.modal = MODAL_CONFIRM;
-            } else {
-                a.proj = newProject();
-                a.hist.reset(a.proj);
-                a.thumbs.clear();
-                a.playhead = 0;
-                a.changed(true);
-            }
-        }
-        if (IsKeyPressed(KEY_A)) {
-            a.sel.clear();
-            for (size_t i = 0; i < a.proj.tracks.size(); i++)
-                for (const Clip &c : a.proj.tracks[i].clips)
-                    a.sel.push_back(ClipRef{(int)i, c.id});
-            a.say("selected %d clips", (int)a.sel.size());
-        }
+        if (IsKeyPressed(KEY_E)) cmd_export(a);
+        if (IsKeyPressed(KEY_N)) cmd_new(a);
+        if (IsKeyPressed(KEY_A)) cmd_select_all(a);
         return;
     }
 
@@ -1345,6 +1412,11 @@ static int run(int argc, char **argv)
     InitWindow(1280, 760, SN_NAME " " SN_VERSION);
     mark("window + GL");
     SetWindowMinSize(900, 560);
+
+    /* File and Edit, on the platforms that have a bar to put them in. After
+     * InitWindow because on macOS that is what creates the NSApplication and
+     * the menu bar this inserts into; before it there is nothing there. */
+    sn_appmenu_install();
     SetExitKey(KEY_NULL);            /* Escape clears the selection */
 
     /* The font before anything else, because the splash writes with it and
@@ -1602,6 +1674,12 @@ static int run(int argc, char **argv)
         EndDrawing();
 
         keys(a);
+
+        /* After EndDrawing, beside keys(), because that is where the events
+         * this drains have just arrived: EndDrawing polls, AppKit dispatches
+         * the menu action during the poll, and acting on it here means the
+         * project changes between frames rather than under one. */
+        appmenu(a);
     }
 
     /* --- shutdown --- */

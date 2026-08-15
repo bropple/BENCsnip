@@ -56,17 +56,19 @@ GUI_SRC  := src/gui/main.cpp \
             src/gui/sn_player.cpp \
             src/gui/sn_tarr.cpp \
             src/gui/sn_filedlg.cpp \
+            src/gui/sn_appmenu.cpp \
             src/gui/sn_dialog.cpp \
             src/gui/sn_peaks.cpp
 GUI_OBJ  := $(GUI_SRC:.cpp=.o)
 GUI      := bencsnip$(EXE)
 
-# The macOS open and save panels are Objective-C++, because they are AppKit
+# The macOS file panels and menu bar are Objective-C++, because they are AppKit
 # calls rather than a program to run - see the top of sn_filedlg_mac.mm. Only
-# this one file is, and only on Darwin; sn_filedlg.cpp holds the other two
+# these are, and only on Darwin; the .cpp beside each holds the other two
 # platforms and compiles to nothing on this one.
 ifeq ($(UNAME_S),Darwin)
-  GUI_MM  := src/gui/sn_filedlg_mac.mm
+  GUI_MM  := src/gui/sn_filedlg_mac.mm \
+             src/gui/sn_appmenu_mac.mm
   GUI_OBJ += $(GUI_MM:.mm=.o)
   # NSOpenPanel and NSSavePanel are AppKit. raylib asks for the Cocoa umbrella,
   # which covers it, but only when raylib was found somewhere that sets RL_SYS

@@ -16,7 +16,8 @@ src/gui/      sn_gui.*        theme and widget set
               sn_track.*      the timeline pane
               sn_dialog.*     export, information, confirm, file browser
               sn_filedlg.*    the platform's own open/save dialogs
-              sn_filedlg_mac.mm  the macOS half of them, in Objective-C++
+              sn_appmenu.*    the menu bar, and the list of what is in it
+              *_mac.mm        the macOS halves of those two, in Objective-C++
               sn_tarr.*       the mascot
               main.cpp        layout, keyboard, and the glue
 ```
