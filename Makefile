@@ -61,6 +61,21 @@ GUI_SRC  := src/gui/main.cpp \
 GUI_OBJ  := $(GUI_SRC:.cpp=.o)
 GUI      := bencsnip$(EXE)
 
+# The macOS open and save panels are Objective-C++, because they are AppKit
+# calls rather than a program to run - see the top of sn_filedlg_mac.mm. Only
+# this one file is, and only on Darwin; sn_filedlg.cpp holds the other two
+# platforms and compiles to nothing on this one.
+ifeq ($(UNAME_S),Darwin)
+  GUI_MM  := src/gui/sn_filedlg_mac.mm
+  GUI_OBJ += $(GUI_MM:.mm=.o)
+  # NSOpenPanel and NSSavePanel are AppKit. raylib asks for the Cocoa umbrella,
+  # which covers it, but only when raylib was found somewhere that sets RL_SYS
+  # - a pkg-config raylib leaves that empty and the link then fails on the
+  # panels with nothing saying which framework they came from. Named here so it
+  # holds however raylib was found, the way -lcomdlg32 does on Windows.
+  MAC_LIBS := -framework AppKit
+endif
+
 PROBE_SRC := tools/probe.cpp
 PROBE_OBJ := $(PROBE_SRC:.cpp=.o)
 PROBE     := bencsnip-probe$(EXE)
@@ -232,7 +247,7 @@ endif
 # Everywhere but the Windows-with-packaged-ffmpeg case, this is just FF_LIBS.
 FF_LINK ?= $(FF_LIBS)
 
-LDLIBS_GUI := $(RL_LIBS) $(RL_SYS) $(FF_LINK) $(WIN_LIBS)
+LDLIBS_GUI := $(RL_LIBS) $(RL_SYS) $(FF_LINK) $(WIN_LIBS) $(MAC_LIBS)
 
 .PHONY: all gui core test probe clean info check-deps
 
@@ -247,6 +262,12 @@ core: $(CORE_LIB)
 # ------------------------------------------------------------------
 %.o: %.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(RL_CFLAGS) -c $< -o $@
+
+# -fno-objc-arc is the default and is said out loud because the file is written
+# for it: the panels are autoreleased class methods held only for the length of
+# one @autoreleasepool, and nothing in there is retained or released by hand.
+%.o: %.mm
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(RL_CFLAGS) -fno-objc-arc -c $< -o $@
 
 $(CORE_OBJ) $(GUI_OBJ) $(PROBE_OBJ) $(TEST_OBJ): $(FF_STAMP)
 
@@ -323,7 +344,7 @@ clean:
 	      src/core/*.d src/gui/*.d tools/*.d tests/*.d $(FF_STAMP)
 
 -include $(CORE_SRC:.cpp=.d) $(GUI_SRC:.cpp=.d) $(PROBE_SRC:.cpp=.d) \
-         $(TEST_SRC:.cpp=.d) src/gui/sn_embed.d
+         $(TEST_SRC:.cpp=.d) $(GUI_MM:.mm=.d) src/gui/sn_embed.d
 
 # ------------------------------------------------------------------
 # Test media. Three small files covering the cases that matter: an mp4 with

@@ -9,8 +9,14 @@
  * already ship:
  *
  *   Windows   GetOpenFileName / GetSaveFileName from comdlg32, part of the OS
- *   macOS     the Cocoa panels, reached through osascript
+ *   macOS     NSOpenPanel and NSSavePanel, in sn_filedlg_mac.mm
  *   Unix      zenity or kdialog, whichever is installed
+ *
+ * The macOS half is a separate file because it is the one that is not a
+ * subprocess. It used to be - osascript, beside zenity, on the grounds that
+ * all three are the same idea - and starting an AppleScript interpreter to
+ * make one method call cost most of a second before the panel appeared. The
+ * note at the top of that file has the rest.
  *
  * The Unix case is the only one that can come up empty, so the return value
  * distinguishes "the user said no" from "there is nothing here to ask with".
