@@ -48,6 +48,22 @@ must() {
     }
 }
 
+# Put a line either side of one exact line, for a call that needs bracketing
+# rather than announcing. Used where the line after the call is not unique in
+# the file and cannot be an anchor of its own.
+wrap() {
+    file="$1"; anchor="$2"; before="$3"; after="$4"
+    grep -qF -- "$anchor" "$file" || {
+        echo "instrument-glfw: anchor not found in $(basename "$file"): $anchor" >&2
+        exit 1
+    }
+    awk -v a="$anchor" -v b="$before" -v c="$after" '
+        !done && index($0, a) { print b; print $0; print c; done = 1; next }
+        { print }
+    ' "$file" > "$file.tmp"
+    mv "$file.tmp" "$file"
+}
+
 HELPER='/* --- added by BENCsnip tools/instrument-glfw.sh --- */
 #if defined(_WIN32)
 #include <stdio.h>
@@ -61,7 +77,7 @@ static double sn_probe_ms(void)
 /* clock() on Windows is wall time since the process started, which is what is
  * wanted here: the thing being chased is a wait, not work, and a processor
  * clock would show nothing at all. */
-#define SNT(x) do { fprintf(stderr, "  [glfw] %9.1f ms  %s\n", sn_probe_ms(), (x)); fflush(stderr); } while (0)
+#define SNT(x) do { fprintf(stderr, "  [glfw] %9.1f ms  %s\\n", sn_probe_ms(), (x)); fflush(stderr); } while (0)
 #else
 #define SNT(x) do { } while (0)
 #endif
@@ -105,6 +121,15 @@ must "$C" '    pixelFormat = choosePixelFormatWGL(window, ctxconfig, fbconfig);'
 # --- and what raylib does around it ----------------------------------------
 R="$SRC/platforms/rcore_desktop_glfw.c"
 must "$R" '#include "GLFW/glfw3.h"' "$HELPER"
+
+# The one raylib makes on purpose, and warns about in its own comment:
+# GLFW 3.4 defers joystick setup until something asks for a joystick, and
+# raylib asks here so that the delay lands before the window rather than on
+# the first frame. On Win32 that runs DirectInput8Create and enumerates every
+# game controller the machine has ever seen, present or not.
+wrap "$R" '    glfwSetJoystickCallback(NULL);' \
+    '    SNT("raylib: about to force joystick init (DirectInput enumeration)");' \
+    '    SNT("raylib: joystick init done");'
 
 must "$R" '        platform.handle = glfwCreateWindow(creationWidth, creationHeight,' \
     '        SNT("raylib: about to glfwCreateWindow");'
