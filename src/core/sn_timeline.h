@@ -18,6 +18,8 @@
 #include "sn_media.h"
 #include "sn_text.h"
 
+#include <cmath>
+
 #include <string>
 #include <vector>
 
@@ -59,13 +61,31 @@ struct Clip {
     double end() const { return pos + dur(); }
 
     /* Source time under a timeline time inside this clip, wrapped into the
-     * range when it repeats. */
+     * range when it repeats.
+     *
+     * The wrap snaps to the start of a cycle rather than trusting the
+     * division, and that is not tidiness. A whole number of cycles does not
+     * always divide as one: the exporter walks `from + n/fps`, so the third
+     * loop of a 6.4 second GIF at 60 fps arrives as 19.199999999999999, whose
+     * ratio to 6.4 is 2.9999999999999997. Truncating that gives two whole
+     * cycles instead of three and leaves `local` one hair short of 6.4 - the
+     * far end of the file, past the last frame, where the decoder has nothing
+     * to hand back. The renderer then drops the layer for exactly one frame
+     * and the picture blinks.
+     *
+     * It happened on the third, sixth and seventh pass and not on the first,
+     * second, fourth, fifth or eighth, which is what "sometimes" looks like
+     * when the cause is the last bit of a double. */
     double srcAt(double t) const
     {
         const double c = cycle();
         if (c <= 0) return in;
+
         double local = t - pos;
-        if (repeat > 1.0 && local >= c) local = local - c * (double)(long)(local / c);
+        if (repeat > 1.0 && local >= c) {
+            local -= c * std::floor(local / c);
+            if (local >= c - 1e-6 || local < 0.0) local = 0.0;
+        }
         return in + local;
     }
 

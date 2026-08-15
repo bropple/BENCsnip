@@ -197,6 +197,58 @@ static void test_timeline()
  * Media
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * Looping
+ *
+ * Needs no media: it is arithmetic on a Clip, and the arithmetic is what was
+ * wrong. See Clip::srcAt.
+ * ------------------------------------------------------------------ */
+
+static void test_loop()
+{
+    printf("looping\n");
+
+    /* A 6.4 second cycle sampled the way the exporter samples it - from + n
+     * over fps, which is a division and does not land on the same doubles
+     * that 6.4 times n does. Every wrap has to come back to the start of the
+     * cycle, not to a hair short of the end of it, because a hair short of
+     * the end is past the last frame and the decoder has nothing there. */
+    sn::Clip c;
+    c.in = 0.0;
+    c.out = 6.4;
+    c.pos = 0.0;
+    c.repeat = 8.0;
+
+    const double fps = 60.0;
+    int late = 0, worst = -1;
+    double worstVal = 0;
+    for (int i = 0; i < (int)(fps * c.dur()); i++) {
+        const double t = i / fps;
+        const double s = c.srcAt(t);
+        if (s < c.in - 1e-9 || s > c.out + 1e-9) { late++; continue; }
+        /* The only way to be within a microsecond of the end is to have
+         * failed to wrap: a sample lands every 1/60 of a second. */
+        if (s > c.out - 1e-6) {
+            late++;
+            if (worst < 0) { worst = i; worstVal = s; }
+        }
+    }
+    CHECK(late == 0, "no sample lands at the far end of the cycle, %d did "
+                     "(first at frame %d, src %.9f)", late, worst, worstVal);
+
+    /* The wrap still wraps: three and a half cycles in is half a cycle in. */
+    CHECK(NEAR(c.srcAt(6.4 * 3 + 3.2), 3.2, 1e-6), "and it still wraps, got %f",
+          c.srcAt(6.4 * 3 + 3.2));
+    CHECK(NEAR(c.srcAt(0.0), 0.0, 1e-9), "the start is the start");
+    CHECK(NEAR(c.srcAt(1.0), 1.0, 1e-9), "the first pass is not wrapped");
+
+    /* A clip that does not repeat is not wrapped at all, however far past the
+     * cycle it is asked. */
+    sn::Clip once = c;
+    once.repeat = 1.0;
+    CHECK(NEAR(once.srcAt(6.0), 6.0, 1e-9), "a clip that plays once does not wrap");
+}
+
 static void test_media()
 {
     printf("media\n");
@@ -1207,6 +1259,7 @@ int main()
 
     test_timeline();
     test_text();
+    test_loop();
 
     if (have(V1) && have(V2) && have(A1)) {
         test_media();

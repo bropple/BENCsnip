@@ -32,6 +32,10 @@ enum {
 
 /* What a file turned out to be. Filled by probe() without decoding anything
  * beyond what the demuxer reads to find out. */
+/* How long a still is, when nothing in the file says. Long enough to see and
+ * short enough to be worth extending rather than always trimming. */
+const double STILL_SECONDS = 5.0;
+
 struct MediaInfo {
     std::string path;
     std::string name;         /* basename, for the bin                    */
@@ -61,6 +65,17 @@ struct MediaInfo {
      * all arrive this way. This flag is what lets the interface say which of
      * the two kinds of "no audio" a file is. */
     bool silentAudio = false;
+
+    /* One picture and no sound: a png, a jpeg, a single-frame anything.
+     *
+     * A still has no duration of its own - a photograph is not five seconds
+     * long - and a clip has to have a length before it can be put on a
+     * timeline and trimmed, so `duration` is given the nominal one below.
+     * The flag is what tells everything downstream that the number was
+     * invented here rather than read out of the file, and it is why asking a
+     * still for the frame at nine seconds gives you the picture rather than
+     * nothing. */
+    bool still = false;
 
     /* Display size: coded size with the pixel aspect and rotation applied.
      * This is the size a preview or an export should use. */

@@ -42,10 +42,17 @@ enum { TOOLBAR_H = 38, TRANSPORT_H = 34, STATUS_H = 22, BIN_W = 264 };
 
 /* Everything ffmpeg is likely to be handed, for the file dialogs. Not a limit
  * on what can be dropped - a drop is given straight to libav, which knows
- * better than any list. */
+ * better than any list.
+ *
+ * That difference was a bug rather than a design: a GIF dropped on the window
+ * worked and the same GIF was invisible in the open dialog, because the list
+ * had no gif in it. Pictures are here for the same reason - libav decodes
+ * them, the renderer composites them, and a still gets a length of its own so
+ * it can be trimmed like anything else. See MediaInfo::still. */
 static const char *MEDIA_EXTS =
     "mp4 mov mkv webm avi m4v mpg mpeg wmv flv ts m2ts mts 3gp ogv "
-    "mp3 wav flac m4a aac ogg opus wma aiff aif";
+    "mp3 wav flac m4a aac ogg opus wma aiff aif "
+    "gif png jpg jpeg webp bmp tif tiff tga";
 
 /* ------------------------------------------------------------------ *
  * App
@@ -1001,31 +1008,34 @@ static void cmd_select_all(App &a)
 /* Put a caption on the timeline at the playhead, and open the window that
  * says what it reads.
  *
- * It goes on the frontmost text track if there is one, and on a new one if
- * there is not. Not always a new one: somebody adding a second caption to a
- * sequence means the next caption, not a second layer of them, and a stack of
- * one-clip tracks is a timeline nobody can read. Putting it in front is the
- * same argument addTrack makes about where a new text track goes.
+ * On a text track that is free for those five seconds, and on a new one when
+ * none is - which is freeTrack, the same rule a dropped file already follows.
+ * It used to reuse the frontmost text track whatever was on it, and a caption
+ * added over a caption cut a hole in the one underneath, because that is what
+ * dropping a clip on top of another means everywhere else in this program.
+ * A caption is not something you meant to land on another one.
+ *
+ * Not a new track every time either: two captions ten seconds apart are the
+ * next caption, not a second layer of them, and a row per caption is a
+ * timeline nobody can read. A new track appears exactly when the time is
+ * already taken, which is the case that was doing damage.
  *
  * Five seconds because a caption is read rather than watched, and because a
  * length that has to be trimmed is friendlier than one that has to be found. */
 static void cmd_add_text(App &a)
 {
-    int track = -1;
-    for (size_t i = 0; i < a.proj.tracks.size(); i++)
-        if (a.proj.tracks[i].kind == TRACK_TEXT) track = (int)i;
+    const double from = std::max(0.0, a.playhead);
+    const double to = from + 5.0;
 
-    if (track < 0) {
-        track = addTrack(a.proj, TRACK_TEXT);
-        if (track < 0) return;
-    }
+    const int track = a.proj.freeTrack(TRACK_TEXT, from, to);
+    if (track < 0) return;
 
     Clip c;
     c.id = a.proj.newId();
     c.source = 0;
     c.in = 0.0;
     c.out = 5.0;
-    c.pos = std::max(0.0, a.playhead);
+    c.pos = from;
     c.text.text = "Text";
     c.text.size = 0.12;
     c.text.y = 0.6;                       /* low, where a caption belongs */

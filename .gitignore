@@ -48,3 +48,6 @@ shots/
 # OS cruft
 .DS_Store
 ._*
+
+# Screenshots and recordings dropped in for reference. Not source.
+screenshots/

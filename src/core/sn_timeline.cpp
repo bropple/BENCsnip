@@ -120,13 +120,47 @@ static std::string kind_prefix(TrackKind k)
     return k == TRACK_VIDEO ? "V" : k == TRACK_AUDIO ? "A" : "T";
 }
 
+/* Where a new track of this kind goes when nobody said.
+ *
+ * Below the ones already there, in every case, which is what somebody adding
+ * a track means by adding one: a new row appears under the last row of its
+ * sort rather than above the first, and nothing that was already on screen
+ * changes place. A new video track used to go to the top - the back of the
+ * picture - on the theory that a new track is a background; in practice it
+ * put the thing you just added behind everything and looked like it had not
+ * been added at all.
+ *
+ * The three kinds differ only in what "the ones already there" means:
+ *
+ *   video   after the last video track, which leaves it behind any captions.
+ *           A new video track in front of the captions would hide them.
+ *   text    after the last track in the visual band, so a caption is in front
+ *           of the pictures rather than behind one.
+ *   audio   the end of the list, which is where the audio band already ends.
+ */
+static int default_insert(const Project &p, TrackKind kind)
+{
+    if (kind == TRACK_AUDIO) return (int)p.tracks.size();
+
+    int at = 0;
+    for (size_t i = 0; i < p.tracks.size(); i++) {
+        const bool counts = kind == TRACK_VIDEO ? p.tracks[i].kind == TRACK_VIDEO
+                                                : visualTrack(p.tracks[i].kind);
+        if (counts) at = (int)i + 1;
+    }
+    return at;
+}
+
 int Project::freeTrack(TrackKind k, double a, double b)
 {
     for (size_t i = 0; i < tracks.size(); i++)
         if (tracks[i].kind == k && !tracks[i].locked && track_free(tracks[i], a, b))
             return (int)i;
 
-    /* None free: add one, keeping video above audio in display order. */
+    /* None free: add one, in the same place the +V, +A and caption buttons
+     * would have put it. Two rules for where a track goes is one rule too
+     * many - a track made because a drop needed one and a track made because
+     * somebody asked for one should land in the same row. */
     Track t;
     t.id = newId();
     t.kind = k;
@@ -135,13 +169,9 @@ int Project::freeTrack(TrackKind k, double a, double b)
     for (const Track &x : tracks) if (x.kind == k) n++;
     t.name = kind_prefix(k) + std::to_string(n + 1);
 
-    size_t insert = tracks.size();
-    if (k == TRACK_VIDEO) {
-        /* Video tracks stack upward: a new one goes on top. */
-        insert = 0;
-    }
+    const int insert = default_insert(*this, k);
     tracks.insert(tracks.begin() + insert, t);
-    return (int)insert;
+    return insert;
 }
 
 /* ------------------------------------------------------------------ *
@@ -185,17 +215,7 @@ int addTrack(Project &p, TrackKind kind, int atIndex)
     t.name = kind_prefix(kind) + std::to_string(n + 1);
 
     int at = atIndex;
-    if (at < 0) {
-        /* A new video track goes at the top, which is the back of the
-         * picture: whatever is already there stays in front of it, which is
-         * what you want when you are adding a background. A new audio track
-         * goes at the bottom, where there is nothing to be in front of.
-         *
-         * A new text track goes at the front of the picture, which is the
-         * bottom of the visual band, because a caption nobody can see is not
-         * what anybody meant by adding one. */
-        at = kind == TRACK_VIDEO ? 0 : (int)p.tracks.size();
-    }
+    if (at < 0) at = default_insert(p, kind);
     at = clamp_into_kind(p, kind, at);
 
     p.tracks.insert(p.tracks.begin() + at, t);

@@ -196,7 +196,20 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
          * already in there. */
         VideoFrame &layer = m_layers[tr.id];
 
-        if (!s->frameAt(c->srcAt(t), &layer, fullW, fullH)) continue;
+        /* A decode that comes back with nothing keeps whatever this track had
+         * last, rather than dropping the layer for a frame.
+         *
+         * Dropping it is a hole: the layers behind show through and the
+         * picture blinks, which for one frame out of sixty reads as a fault
+         * in the footage rather than as a fault here. It is what a wrapped
+         * GIF used to do at some of its loop points - see Clip::srcAt, where
+         * the cause was - and holding the previous picture would have made
+         * that invisible instead of merely rare, which is the argument for
+         * doing it whatever the cause turns out to be next time.
+         *
+         * A track that has never decoded anything has nothing to hold, and
+         * that one really is skipped. */
+        if (!s->frameAt(c->srcAt(t), &layer, fullW, fullH) && !layer.valid()) continue;
         if (!layer.valid()) continue;
 
         const int cx = (int)std::lround(tr.cropL * layer.w);

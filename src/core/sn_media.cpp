@@ -335,6 +335,14 @@ bool probe(const std::string &path, MediaInfo *out, std::string *err)
         if (err) *err = mi.name + ": no video or audio in it";
         return false;
     }
+    /* A still picture. See MediaInfo::still: it has no length of its own, so
+     * it is given one, or it arrives on the timeline as a clip of zero
+     * seconds - which is a clip nobody can see, select or trim. */
+    if (mi.hasVideo && !mi.hasAudio && mi.duration <= 0.0) {
+        mi.still = true;
+        mi.duration = STILL_SECONDS;
+    }
+
     if (mi.duration < 0) mi.duration = 0;
     *out = mi;
     return true;
@@ -649,6 +657,11 @@ bool Source::frameAt(double t, VideoFrame *out, int outW, int outH)
 {
     if (!hasVideo()) return false;
     if (t < 0) t = 0;
+
+    /* A still is the same picture at every moment, and the only moment the
+     * file actually has is the first one. Asking the decoder for the frame at
+     * nine seconds of a photograph is asking it to seek past the end. */
+    if (m_info.still) t = 0.0;
 
     /* Scrubbing forward a little should not start over from the keyframe.
      * Two seconds is longer than most GOPs and much shorter than the time a
