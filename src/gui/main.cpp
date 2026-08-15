@@ -1626,6 +1626,11 @@ static int run(int argc, char **argv)
 
 } /* namespace sn */
 
+/* The probe in tools/glprobe.c, compiled into this executable as well as
+ * shipped beside it. Same calls, same order, different process - which is the
+ * only way to tell "the sequence is slow" apart from "this binary is slow". */
+extern "C" int sn_glprobe_run(void);
+
 int main(int argc, char **argv)
 {
     sn::g_t0 = sn::sn_clock::now();
@@ -1667,6 +1672,12 @@ int main(int argc, char **argv)
             sn::g_shotAfter = atoi(argv[++i]);
             continue;
         }
+        if (!strcmp(argv[i], "--glprobe")) {
+            /* Before any window: the point is to be the first thing in this
+             * process to touch the graphics driver and the shell. */
+            sn_attach_console();
+            return sn_glprobe_run();
+        }
         if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             printf("%s %s - a video editor\n\n", SN_NAME, SN_VERSION);
             printf("  bencsnip [FILE ...]\n\n");
@@ -1675,6 +1686,8 @@ int main(int argc, char **argv)
             printf("  --shot FILE.png    draw a few frames, write a screenshot, exit\n");
             printf("  --frames N         how many frames to draw first (default 60)\n");
             printf("  --timing           print how long each part of starting up took\n");
+            printf("  --glprobe          time every Windows call on the way to a GL\n");
+            printf("                     context, and stop. For a slow-opening window\n");
             printf("  --log FILE         write the startup log here. Implied by --timing,\n");
             printf("                     which writes one to the temporary directory\n");
             printf("  --msaa             ask for a multisampled pixel format. Smooths\n");

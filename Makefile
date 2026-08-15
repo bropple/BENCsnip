@@ -43,6 +43,12 @@ CORE_SRC := src/core/sn_media.cpp \
 CORE_OBJ := $(CORE_SRC:.cpp=.o)
 CORE_LIB := libbencsnip.a
 
+# The GL probe is compiled into the executable as well as shipped beside it -
+# see the note at the top of tools/glprobe.c. Behind --glprobe, so it costs a
+# few kilobytes and nothing else.
+PROBE_IN_GUI := tools/glprobe.c
+PROBE_IN_GUI_OBJ := tools/glprobe.embedded.o
+
 GUI_SRC  := src/gui/main.cpp \
             src/gui/sn_gui.cpp \
             src/gui/sn_bin.cpp \
@@ -77,7 +83,10 @@ EMBED_IN := assets/fonts/TerminusTTF.ttf \
             assets/fonts/OFL.txt \
             LICENSE \
             NOTICE
-GUI_OBJ  += $(EMBED_OBJ)
+GUI_OBJ  += $(EMBED_OBJ) $(PROBE_IN_GUI_OBJ)
+
+$(PROBE_IN_GUI_OBJ): $(PROBE_IN_GUI)
+	$(CC) $(CFLAGS) -DSN_GLPROBE_EMBEDDED -c $< -o $@
 
 # ------------------------------------------------------------------
 # raylib

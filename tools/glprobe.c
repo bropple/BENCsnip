@@ -22,14 +22,26 @@
  *   cc -O2 tools/glprobe.c -o glprobe.exe -lopengl32 -lgdi32 -luser32
  */
 
+/* Built twice: as glprobe.exe, and into bencsnip.exe behind --glprobe.
+ *
+ * That second one is the point. The standalone probe reaches a GL context in
+ * a quarter of a second on a machine where BENCsnip takes ten and a half, and
+ * the two run the same Windows calls - so what differs is not the sequence
+ * but the process running it. One executable links ffmpeg, raylib and a
+ * static runtime; the other links almost nothing. Running the identical probe
+ * from inside the big one is what tells those two apart. */
+
 #ifndef _WIN32
 #include <stdio.h>
-int main(void)
+int sn_glprobe_run(void)
 {
     printf("glprobe is for Windows. Everywhere else, this problem has not"
            " turned up.\n");
     return 0;
 }
+#ifndef SN_GLPROBE_EMBEDDED
+int main(void) { return sn_glprobe_run(); }
+#endif
 #else
 
 #include <windows.h>
@@ -62,7 +74,7 @@ static void step(const char *what)
     g_last = at;
 }
 
-int main(void)
+int sn_glprobe_run(void)
 {
     clock_start();
     printf("\nglprobe: each Win32 and WGL call on the way to a GL context.\n");
@@ -222,6 +234,62 @@ int main(void)
         else printf("               (the driver refused it)\n");
     }
 
+    /* ---------------------------------------------------------------- *
+     * And the rest of it: what GLFW does to the window itself.
+     *
+     * Everything above is how a context gets made, and on the machine this
+     * is for it all came back in a quarter of a second while GLFW took ten
+     * and a half. So the difference is not in the context at all - it is in
+     * the things GLFW does to the window that a probe which never shows its
+     * window does not: register it for dropped files, put it on screen, and
+     * take the foreground.
+     *
+     * Each of those is a call into the shell or the window manager, and any
+     * of them can be held up by something else on the machine that has an
+     * opinion about new windows. Which one is worth knowing, because two of
+     * them are avoidable from inside raylib and one is not.
+     * ---------------------------------------------------------------- */
+    printf("\n  what GLFW does to the window, which the above does not:\n");
+    printf("  %9s     %9s  %s\n", "at", "took", "step");
+    g_last = ms_now();
+
+    SetPropW(wnd, L"GLFW", (HANDLE)wnd);
+    step("SetPropW");
+
+    ChangeWindowMessageFilterEx(wnd, WM_DROPFILES, MSGFLT_ALLOW, NULL);
+    ChangeWindowMessageFilterEx(wnd, WM_COPYDATA, MSGFLT_ALLOW, NULL);
+    ChangeWindowMessageFilterEx(wnd, 0x0049 /* WM_COPYGLOBALDATA */, MSGFLT_ALLOW, NULL);
+    step("ChangeWindowMessageFilterEx x3");
+
+    {
+        WINDOWPLACEMENT wp = {sizeof(wp)};
+        GetWindowPlacement(wnd, &wp);
+        step("GetWindowPlacement");
+        SetWindowPlacement(wnd, &wp);
+        step("SetWindowPlacement");
+    }
+
+    SetWindowPos(wnd, HWND_TOP, 100, 100, 640, 480, SWP_NOACTIVATE | SWP_NOZORDER);
+    step("SetWindowPos");
+
+    /* Registers the window with the shell for drag and drop. The first shell
+     * call a process makes can be the one that loads every shell extension
+     * on the machine. */
+    DragAcceptFiles(wnd, TRUE);
+    step("DragAcceptFiles");
+
+    ShowWindow(wnd, SW_SHOWNA);
+    step("ShowWindow");
+
+    BringWindowToTop(wnd);
+    step("BringWindowToTop");
+
+    SetForegroundWindow(wnd);
+    step("SetForegroundWindow");
+
+    SetFocus(wnd);
+    step("SetFocus");
+
     printf("\n  vendor:   %s\n", vendor ? vendor : "?");
     printf("  renderer: %s\n", renderer ? renderer : "?");
     printf("  version:  %s\n\n", version ? version : "?");
@@ -237,5 +305,9 @@ int main(void)
     DestroyWindow(wnd);
     return 0;
 }
+
+#ifndef SN_GLPROBE_EMBEDDED
+int main(void) { return sn_glprobe_run(); }
+#endif
 
 #endif /* _WIN32 */
