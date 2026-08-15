@@ -342,6 +342,13 @@ int sn_toggle(sn_ui *ui, int id, Rectangle r, const char *label, int on)
  * step with the palette; a triangle is three points.
  * ------------------------------------------------------------------ */
 
+void sn_triangle(Vector2 a, Vector2 b, Vector2 c, Color col)
+{
+    const float cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    if (cross < 0) DrawTriangle(a, b, c, col);
+    else DrawTriangle(a, c, b, col);
+}
+
 void sn_draw_icon(sn_icon which, Rectangle r, Color c)
 {
     /* Everything is drawn inside a unit square from the middle out, so the
@@ -352,16 +359,7 @@ void sn_draw_icon(sn_icon which, Rectangle r, Color c)
 
     auto V = [&](float x, float y) { return Vector2{cx + x * s, cy + y * s}; };
 
-    /* raylib culls one winding, and on screen - where y runs downwards - the
-     * visible one is the order that comes out negative here. Getting it wrong
-     * draws nothing at all, silently, which is a bad way to spend an evening;
-     * so the three points go through this and it puts them in the right order
-     * itself. */
-    auto tri = [&](Vector2 a, Vector2 b, Vector2 d) {  /* always in `c` */
-        const float cross = (b.x - a.x) * (d.y - a.y) - (b.y - a.y) * (d.x - a.x);
-        if (cross < 0) DrawTriangle(a, b, d, c);
-        else DrawTriangle(a, d, b, c);
-    };
+    auto tri = [&](Vector2 a, Vector2 b, Vector2 d) { sn_triangle(a, b, d, c); };
     auto bar = [&](float x, float y, float w, float h) {
         DrawRectangleRec(Rectangle{cx + x * s, cy + y * s, w * s, h * s}, c);
     };

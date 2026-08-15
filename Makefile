@@ -58,6 +58,7 @@ GUI_SRC  := src/gui/main.cpp \
             src/gui/sn_tarr.cpp \
             src/gui/sn_filedlg.cpp \
             src/gui/sn_appmenu.cpp \
+            src/gui/sn_colordlg.cpp \
             src/gui/sn_dialog.cpp \
             src/gui/sn_peaks.cpp
 GUI_OBJ  := $(GUI_SRC:.cpp=.o)
@@ -69,7 +70,8 @@ GUI      := bencsnip$(EXE)
 # platforms and compiles to nothing on this one.
 ifeq ($(UNAME_S),Darwin)
   GUI_MM  := src/gui/sn_filedlg_mac.mm \
-             src/gui/sn_appmenu_mac.mm
+             src/gui/sn_appmenu_mac.mm \
+             src/gui/sn_colordlg_mac.mm
   GUI_OBJ += $(GUI_MM:.mm=.o)
   # NSOpenPanel and NSSavePanel are AppKit. raylib asks for the Cocoa umbrella,
   # which covers it, but only when raylib was found somewhere that sets RL_SYS

@@ -29,7 +29,8 @@ enum {
     LANE_H = 56,
     LANE_GAP = 2,
     EDGE_GRAB = 7,       /* how close to an edge counts as the edge */
-    FADE_GRAB = 12
+    FADE_GRAB = 14,      /* ...and how close to a fade handle counts as it  */
+    FADE_STRIP = 15      /* the band along the top the fades own outright   */
 };
 
 /* ------------------------------------------------------------------ *
@@ -241,11 +242,38 @@ static void draw_clip(App &a, int idx, const Clip &c, TrackKind kind, bool hot)
 
     /* The fade handles: small squares in the top corners. Only when the clip
      * is wide enough that they are not the whole clip. */
-    if (r.width > 40 && (hot || isSel)) {
-        DrawRectangle((int)(r.x + (float)(c.fadeIn * a.zoom)) - 3, (int)r.y + 1, 6, 6,
-                      SN_TEXT);
-        DrawRectangle((int)(r.x + r.width - (float)(c.fadeOut * a.zoom)) - 3, (int)r.y + 1,
-                      6, 6, SN_TEXT);
+    /* --- fades ---
+     *
+     * The ramp is drawn whenever there is one, whether or not the pointer is
+     * anywhere near: a fade is a property of the edit and somebody scrolling
+     * past should be able to see that this clip has one. It is a wedge taken
+     * out of the corner, which is the shape of what it does - the picture is
+     * at nothing at the point of the wedge and at full at its base.
+     *
+     * The grips are drawn on a clip that is selected or under the pointer,
+     * and they are square handles rather than the six-pixel dots they were.
+     * See the hit test for why a fade of zero used to be nearly impossible to
+     * pick up at all. */
+    const float fin = (float)(c.fadeIn * a.zoom);
+    const float fout = (float)(c.fadeOut * a.zoom);
+    const Color ramp = {0, 0, 0, 110};
+
+    if (fin > 1.0f)
+        sn_triangle(Vector2{r.x, r.y}, Vector2{r.x + fin, r.y},
+                    Vector2{r.x, r.y + r.height}, ramp);
+    if (fout > 1.0f)
+        sn_triangle(Vector2{r.x + r.width, r.y}, Vector2{r.x + r.width - fout, r.y},
+                    Vector2{r.x + r.width, r.y + r.height}, ramp);
+
+    if (r.width > 30 && (hot || isSel)) {
+        const float k = 4.0f;
+        auto grip = [&](float gx) {
+            Rectangle g = {gx - k, r.y + 1, k * 2, k * 2};
+            DrawRectangleRec(g, SN_TEXT);
+            DrawRectangleLinesEx(g, 1, SN_BG);
+        };
+        grip(r.x + fin);
+        grip(r.x + r.width - fout);
     }
 
     /* The name, and how long it is. Both go in a strip along the bottom
@@ -654,15 +682,31 @@ void timelinePane(App &a, Rectangle r)
             overClip = ClipRef{overTrack, c.id};
 
             const bool wide = cr.width > 24;
-            if (wide && m.x < cr.x + EDGE_GRAB) overWhat = DRAG_TRIM_IN;
-            else if (wide && m.x > cr.x + cr.width - EDGE_GRAB) overWhat = DRAG_TRIM_OUT;
-            else if (m.y < cr.y + 10 &&
-                     std::fabs(m.x - (cr.x + (float)(c.fadeIn * a.zoom))) < FADE_GRAB)
+
+            /* The band along the top belongs to the fades, corners and all,
+             * and it is tested before the trim handles rather than after.
+             *
+             * The other way round, a fade of zero was almost impossible to
+             * start: its handle sits exactly on the clip's edge, which is
+             * where the trim handle is, and trim went first - so the only way
+             * in was a five pixel gap between the end of the trim zone and
+             * the end of the fade's reach. That is the whole of "the fade
+             * controls are hard to use".
+             *
+             * They still share the corner rather than one taking it: the top
+             * fifteen pixels of the edge make a fade and the rest of it
+             * trims, which is how every editor that has both does it. */
+            const bool strip = m.y < cr.y + FADE_STRIP;
+
+            if (wide && strip &&
+                std::fabs(m.x - (cr.x + (float)(c.fadeIn * a.zoom))) < FADE_GRAB)
                 overWhat = DRAG_FADE_IN;
-            else if (m.y < cr.y + 10 &&
+            else if (wide && strip &&
                      std::fabs(m.x - (cr.x + cr.width - (float)(c.fadeOut * a.zoom))) <
                          FADE_GRAB)
                 overWhat = DRAG_FADE_OUT;
+            else if (wide && m.x < cr.x + EDGE_GRAB) overWhat = DRAG_TRIM_IN;
+            else if (wide && m.x > cr.x + cr.width - EDGE_GRAB) overWhat = DRAG_TRIM_OUT;
             else if (t.kind == TRACK_AUDIO &&
                      std::fabs(m.y - (cr.y + cr.height * (1.0f - (float)(c.gain * 0.5)))) < 5)
                 overWhat = DRAG_GAIN;
@@ -873,8 +917,33 @@ void timelinePane(App &a, Rectangle r)
         a.drag = DRAG_NONE;
     }
 
+    /* --- double-click a caption: the window with the words in it ---
+     *
+     * The same gesture the preview offers on the caption itself, because the
+     * timeline is where a clip is found when the playhead is somewhere else
+     * and the caption is not on screen to be double-clicked. */
+    if (inside && overClip.ok() && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+        a.proj.tracks[overClip.track].kind == TRACK_TEXT &&
+        sn_double_click(&ui, 5400 + overClip.clip)) {
+        a.select(overClip, false);
+        a.textClip = overClip;
+        a.modal = MODAL_TEXT;
+    }
+
     /* --- right-click --- */
-    if (inside && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && overClip.ok()) {
+    if (inside && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && overClip.ok() &&
+        a.proj.tracks[overClip.track].kind == TRACK_TEXT) {
+        /* Its own list on its own tag rather than items bolted onto the one
+         * below. Half of that list is about sound or about a linked video
+         * half, a caption has neither, and the handler there finds its last
+         * item by counting - which is exactly the arrangement that breaks
+         * when somebody adds a seventh item to one case out of two. */
+        static const char *titems[] = {"edit the caption...", "-", "split here",
+                                       "delete", "delete and close the gap"};
+        a.select(overClip, false);
+        a.textClip = overClip;
+        sn_menu_open(&ui, m, titems, 5, 101);
+    } else if (inside && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && overClip.ok()) {
         const Clip *rc = a.proj.clip(overClip);
         const bool linked = rc && rc->link != 0;
 

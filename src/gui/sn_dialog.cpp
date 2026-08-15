@@ -11,6 +11,7 @@
  */
 
 #include "sn_app.h"
+#include "sn_colordlg.h"
 #include "sn_embed.h"
 #include "sn_filedlg.h"
 #include "sn_version.h"
@@ -18,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -612,48 +614,128 @@ std::string join_lines(const std::string in[3])
     return out;
 }
 
-/* One colour as four small sliders on a line, the way the crop row does it,
- * with the result beside them. Four sliders rather than a colour wheel
- * because a wheel is a widget this program does not have and these are the
- * numbers underneath one anyway. */
+/* --- one colour on one line ---
+ *
+ * A swatch, the hex somebody can type or read off, the platform's own picker,
+ * and alpha on its own.
+ *
+ * It was four sliders per colour - red, green, blue, alpha - laid out like the
+ * crop row in the layout window. Nobody picks a colour by moving three numbers
+ * separately, and eight sliders were also a hundred pixels wider than the
+ * window they were in, which is how the arrangement announced itself.
+ *
+ * Alpha stays a slider because it is the one channel the pickers disagree
+ * about: ChooseColor has never heard of it, zenity sometimes answers with one,
+ * and only NSColorPanel does it properly. A control that works on one platform
+ * out of three is worse than a slider that works on all of them.
+ */
+bool hex_of(Rgba c, char *out, size_t cap)
+{
+    return snprintf(out, cap, "%02X%02X%02X", (unsigned)((c >> 24) & 0xff),
+                    (unsigned)((c >> 16) & 0xff), (unsigned)((c >> 8) & 0xff)) > 0;
+}
+
+/* "#1a2b3c", "1a2b3c", "#1a2b3cff", and the three-digit short form every web
+ * page uses. Anything else leaves the colour alone: a half-typed hex is a
+ * person still typing, not a request for black. */
+bool hex_to(const std::string &in, Rgba *c)
+{
+    std::string t;
+    for (char ch : in)
+        if (!isspace((unsigned char)ch) && ch != '#') t += (char)toupper((unsigned char)ch);
+
+    for (char ch : t)
+        if (!isxdigit((unsigned char)ch)) return false;
+
+    auto nib = [](char ch) {
+        return ch <= '9' ? ch - '0' : ch - 'A' + 10;
+    };
+
+    unsigned r, g, b, a = *c & 0xffu;
+    if (t.size() == 3) {
+        r = (unsigned)nib(t[0]) * 17; g = (unsigned)nib(t[1]) * 17;
+        b = (unsigned)nib(t[2]) * 17;
+    } else if (t.size() == 6 || t.size() == 8) {
+        r = (unsigned)(nib(t[0]) * 16 + nib(t[1]));
+        g = (unsigned)(nib(t[2]) * 16 + nib(t[3]));
+        b = (unsigned)(nib(t[4]) * 16 + nib(t[5]));
+        if (t.size() == 8) a = (unsigned)(nib(t[6]) * 16 + nib(t[7]));
+    } else {
+        return false;
+    }
+
+    *c = (r << 24) | (g << 16) | (b << 8) | a;
+    return true;
+}
+
+/* What is in each hex field, kept between frames.
+ *
+ * A field being typed into holds what has been typed, half-finished and all;
+ * a field that does not have the caret shows the colour. Without that, every
+ * keystroke would be overwritten by the colour the field has not yet been
+ * told about, and "1a2b3" - five digits of six - would never survive long
+ * enough to become six.
+ */
+std::map<int, std::string> g_hex;
+
 bool colour_row(App &a, int id, const char *name, Rgba *c, float x, float y, float w)
 {
     sn_ui &ui = a.ui;
-    label(a, name, x, y);
-
-    int part[4] = {(int)((*c >> 24) & 0xff), (int)((*c >> 16) & 0xff),
-                   (int)((*c >> 8) & 0xff), (int)(*c & 0xff)};
-    static const char *tag[4] = {"R", "G", "B", "A"};
+    label(a, name, x, y + 4);
 
     bool changed = false;
-    const float sw = (w - 30) / 4.0f;
 
-    for (int i = 0; i < 4; i++) {
-        Rectangle sl = {x + 114 + i * sw, y - 4, sw - 12, 16};
-        float v = part[i] / 255.0f;
-        if (sn_slider(&ui, id + i, sl, &v)) {
-            part[i] = (int)(v * 255.0f + 0.5f);
-            changed = true;
-        }
-        char num[16];
-        snprintf(num, sizeof num, "%s %d", tag[i], part[i]);
-        sn_text(&ui, SN_F_TINY, num, sl.x, y + 12, SN_EDGE);
+    const unsigned r = (*c >> 24) & 0xff, g = (*c >> 16) & 0xff;
+    const unsigned b = (*c >> 8) & 0xff, al = *c & 0xff;
+
+    /* The swatch, over a chequer so an alpha of nothing looks like nothing
+     * rather than like black. */
+    Rectangle sw = {x + 98, y, 30, 22};
+    for (int gy = 0; gy < 3; gy++)
+        for (int gx = 0; gx < 4; gx++)
+            DrawRectangle((int)sw.x + gx * 8, (int)sw.y + gy * 8, 8, 8,
+                          (gx + gy) % 2 ? SN_EDGE : SN_BG);
+    DrawRectangleRec(sw, Color{(unsigned char)r, (unsigned char)g, (unsigned char)b,
+                               (unsigned char)al});
+    DrawRectangleLinesEx(sw, 1, SN_BORDER);
+
+    std::string &text = g_hex[id];
+    if (ui.focus != id) {
+        char now[16];
+        hex_of(*c, now, sizeof now);
+        text = now;
     }
 
-    if (changed)
-        *c = ((Rgba)part[0] << 24) | ((Rgba)part[1] << 16) | ((Rgba)part[2] << 8) |
-             (Rgba)part[3];
+    Rectangle hf = {x + 134, y, 96, 22};
+    if (sn_field(&ui, id, hf, text, "RRGGBB")) {
+        Rgba n = *c;
+        if (hex_to(text, &n) && n != *c) { *c = n; changed = true; }
+    }
 
-    /* The swatch, over a chequer so that an alpha of nothing looks like
-     * nothing rather than like black. */
-    Rectangle sw2 = {x + 78, y - 5, 26, 18};
-    for (int gy = 0; gy < 2; gy++)
-        for (int gx = 0; gx < 3; gx++)
-            DrawRectangle((int)sw2.x + gx * 9, (int)sw2.y + gy * 9, 9, 9,
-                          (gx + gy) % 2 ? SN_EDGE : SN_BG);
-    DrawRectangleRec(sw2, Color{(unsigned char)part[0], (unsigned char)part[1],
-                                (unsigned char)part[2], (unsigned char)part[3]});
-    DrawRectangleLinesEx(sw2, 1, SN_BORDER);
+    Rectangle pick = {x + 238, y, 74, 22};
+    if (sn_button(&ui, id + 1, pick, "PICK", 1)) {
+        unsigned v = (unsigned)*c;
+        const int rc = sn_color_dialog(GetWindowHandle(), name, &v);
+        if (rc == SN_COLOR_OK && (Rgba)v != *c) {
+            *c = (Rgba)v;
+            changed = true;
+        } else if (rc == SN_COLOR_UNAVAILABLE) {
+            a.complain("no colour picker on this machine - type the hex instead");
+        }
+    }
+
+    label(a, "ALPHA", x + 326, y + 4);
+    Rectangle as = {x + 386, y + 4, w - 386 - 52, 14};
+    float av = al / 255.0f;
+    if (sn_slider(&ui, id + 2, as, &av)) {
+        *c = (*c & 0xffffff00u) | (Rgba)(unsigned)(av * 255.0f + 0.5f);
+        changed = true;
+    }
+    {
+        char n[16];
+        snprintf(n, sizeof n, "%d%%", (int)(al * 100 / 255));
+        sn_text(&ui, SN_F_TINY, n, as.x + as.width + 8, y + 4, SN_EDGE);
+    }
 
     return changed;
 }
@@ -829,8 +911,8 @@ void textDialog(App &a)
             }
         }
         if (st.text.find('\n') == std::string::npos)
-            sn_text(&ui, SN_F_TINY, "only matters with more than one line",
-                    r.x + 410, y - 2, SN_EDGE);
+            sn_text(&ui, SN_F_TINY, "needs more than one line", r.x + 410, y - 2,
+                    SN_EDGE);
         y += 30;
     }
 

@@ -459,14 +459,18 @@ void previewPane(App &a, Rectangle r)
                     DrawLineEx(q[i], q[(i + 1) & 3], 1.0f, SN_ACCENT);
                 DrawLineEx(topMid, rot, 1.0f, SN_ACCENT);
 
-                const float k = 4.5f;
+                /* Big enough to aim at. The first version drew nine pixel
+                 * squares with a seven pixel reach, which is a small target
+                 * on a large canvas and smaller still on a display that is
+                 * counting in points while the eye is counting in pixels. */
+                const float k = 6.0f;
                 for (int i = 0; i < 4; i++) {
                     DrawRectangleRec(Rectangle{q[i].x - k, q[i].y - k, k * 2, k * 2}, SN_BG);
                     DrawRectangleLinesEx(Rectangle{q[i].x - k, q[i].y - k, k * 2, k * 2}, 1,
                                          SN_ACCENT);
                 }
-                DrawCircleV(rot, 4.5f, SN_BG);
-                DrawCircleLinesV(rot, 4.5f, SN_ACCENT);
+                DrawCircleV(rot, 6.0f, SN_BG);
+                DrawCircleLinesV(rot, 6.0f, SN_ACCENT);
             }
 
             auto near = [](Vector2 p, Vector2 t, float r) {
@@ -480,8 +484,8 @@ void previewPane(App &a, Rectangle r)
                 bool onRot = false;
                 if (haveBox) {
                     for (int i = 0; i < 4; i++)
-                        if (near(m, q[i], 7.0f)) corner = i;
-                    onRot = corner < 0 && near(m, rot, 8.0f);
+                        if (near(m, q[i], 9.0f)) corner = i;
+                    onRot = corner < 0 && near(m, rot, 10.0f);
                 }
 
                 if (haveBox && (corner >= 0 || onRot)) {
@@ -608,13 +612,13 @@ void previewPane(App &a, Rectangle r)
                 bool said = false;
                 if (haveBox) {
                     for (int i = 0; i < 4; i++)
-                        if (near(m, q[i], 7.0f)) {
+                        if (near(m, q[i], 9.0f)) {
                             sn_cursor(&a.ui, i == 0 || i == 2 ? MOUSE_CURSOR_RESIZE_NWSE
                                                               : MOUSE_CURSOR_RESIZE_NESW);
                             sn_tip(&a.ui, "drag to resize the caption");
                             said = true;
                         }
-                    if (!said && near(m, rot, 8.0f)) {
+                    if (!said && near(m, rot, 10.0f)) {
                         sn_cursor(&a.ui, MOUSE_CURSOR_POINTING_HAND);
                         sn_tip(&a.ui, "drag to turn it - Shift steps by fifteen degrees");
                         said = true;
@@ -1369,6 +1373,30 @@ static void menus(App &a)
             a.say("unlinked - the %d halves move on their own now", n);
             break;
         }
+        default: break;
+        }
+        return;
+    }
+
+    if (tag == 101) {                     /* a caption on the timeline */
+        switch (pick) {
+        case 0: a.modal = MODAL_TEXT; break;
+        case 2: {
+            if (!a.sel.empty()) {
+                const ClipRef r = a.sel[0];
+                const Clip *c = a.proj.clip(r);
+                if (c) {
+                    const double at = c->covers(a.playhead) ? a.playhead
+                                                            : c->pos + c->dur() * 0.5;
+                    splitAt(a.proj, at, &r);
+                    a.changed();
+                    a.say("cut at %s", fmtTime(at).c_str());
+                }
+            }
+            break;
+        }
+        case 3: doDelete(a, false); break;
+        case 4: doDelete(a, true); break;
         default: break;
         }
         return;

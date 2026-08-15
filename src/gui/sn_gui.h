@@ -181,6 +181,14 @@ typedef enum {
     SN_I_UP, SN_I_DOWN, SN_I_CROP, SN_I_LOOP, SN_I_TEXT
 } sn_icon;
 
+/* A filled triangle whichever way round its points are given.
+ *
+ * raylib culls one winding, and on screen - where y runs downwards - the
+ * visible one is the order that comes out negative. Getting it wrong draws
+ * nothing at all, silently, which is a bad way to spend an evening, so every
+ * triangle in this program goes through here and it sorts the points itself. */
+void sn_triangle(Vector2 a, Vector2 b, Vector2 c, Color col);
+
 void sn_draw_icon(sn_icon which, Rectangle r, Color c);
 /* Draw this icon as the pointer, instead of a system cursor. Cleared every
  * frame like everything else here. */
