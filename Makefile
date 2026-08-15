@@ -100,6 +100,13 @@ $(PROBE_IN_GUI_OBJ): $(PROBE_IN_GUI)
 #
 # A static libraylib.a is preferred where one exists, so the binary runs on a
 # machine that has never heard of raylib.
+#
+# One thing a raylib built elsewhere will not have: tools/no-gamepads.sh. Every
+# workflow here runs it against the source before building, because on Windows
+# GLFW's joystick support costs ten seconds of startup on a machine with a lot
+# of peripherals and this program does not read joysticks. A raylib built
+# without it works perfectly well and opens its window slowly on exactly one
+# kind of machine. The script says the rest.
 # ------------------------------------------------------------------
 VENDOR_RL := $(wildcard vendor/raylib/lib/libraylib.a)
 

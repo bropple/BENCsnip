@@ -94,6 +94,7 @@ jobs:
         run: |
           git clone --depth 1 --branch "$RAYLIB_VERSION" \
             https://github.com/raysan5/raylib.git /tmp/raylib
+          tools/no-gamepads.sh /tmp/raylib
           cmake -S /tmp/raylib -B /tmp/raylib/build -DCMAKE_INSTALL_PREFIX=/tmp/rl \
             -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/raylib/build -j3
@@ -188,6 +189,7 @@ jobs:
         run: |
           git clone --depth 1 --branch "$RAYLIB_VERSION" \
             https://github.com/raysan5/raylib.git /tmp/raylib
+          tools/no-gamepads.sh /tmp/raylib
           cmake -S /tmp/raylib -B /tmp/raylib/build -DCMAKE_INSTALL_PREFIX=/tmp/rl \
             -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/raylib/build -j3
@@ -292,6 +294,7 @@ jobs:
         run: |
           git clone --depth 1 --branch "$RAYLIB_VERSION" \
             https://github.com/raysan5/raylib.git /tmp/raylib
+          tools/no-gamepads.sh /tmp/raylib
           make -C /tmp/raylib/src PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC -j2
           mkdir -p /tmp/rl/include /tmp/rl/lib
           cp /tmp/raylib/src/raylib.h /tmp/raylib/src/raymath.h /tmp/raylib/src/rlgl.h \

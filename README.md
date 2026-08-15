@@ -159,6 +159,15 @@ with `include/` and `lib/libraylib.a` in it, or pass `RAYLIB=/somewhere`. The
 build prefers a static `libraylib.a` where it finds one, so the result runs on
 a machine that has never heard of raylib.
 
+**Building raylib yourself, for Windows:** run `tools/no-gamepads.sh` against
+the raylib source before you build it, as every workflow here does. GLFW looks
+for game controllers while the window is being created, and on a machine with
+a lot of things plugged into it that took ten and a half seconds — measured,
+and it is why the released builds do not do it. Nothing here reads a joystick.
+The same wait shows up in Windows' own Game Controllers panel (`joy.cpl`) on an
+affected machine, which is the quickest way to tell it apart from anything this
+program is doing.
+
 ### macOS
 
 ```

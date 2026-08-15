@@ -61,6 +61,7 @@ jobs:
         run: |
           git clone --depth 1 --branch "$RAYLIB_VERSION" \
             https://github.com/raysan5/raylib.git /tmp/raylib
+          tools/no-gamepads.sh /tmp/raylib
           tools/instrument-glfw.sh /tmp/raylib
           make -C /tmp/raylib/src PLATFORM=PLATFORM_DESKTOP RAYLIB_LIBTYPE=STATIC -j2
           mkdir -p /tmp/rl/include /tmp/rl/lib
