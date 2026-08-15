@@ -143,6 +143,9 @@ int main(void)
     step("load the WGL extension entry points");
 
     printf("\n  the WGL path, which is the one GLFW takes:\n");
+    printf("    wglGetPixelFormatAttribivARB  %s\n", getAttribiv ? "present" : "MISSING");
+    printf("    wglChoosePixelFormatARB       %s\n", chooseARB ? "present" : "MISSING");
+    printf("    wglCreateContextAttribsARB    %s\n", createCtx ? "present" : "MISSING");
     printf("  %9s     %9s  %s\n", "at", "took", "step");
 
     if (!getAttribiv) {
@@ -177,6 +180,25 @@ int main(void)
         if (nFormats > 0)
             printf("               %.2f ms per format, %d of them\n",
                    (after - before) / nFormats, nFormats);
+    }
+
+    /* The other half of the same loop. GLFW uses the extension when the
+     * driver offers it and falls back to this when it does not, and both are
+     * one call per format - so whichever path is taken on a given machine,
+     * the cost is here. Timed as well as the other, so this does not need
+     * running twice to find out which one mattered. */
+    {
+        const int nLegacy = DescribePixelFormat(dc, 1, sizeof(PIXELFORMATDESCRIPTOR), NULL);
+        PIXELFORMATDESCRIPTOR d;
+        const double before = ms_now();
+        for (int i = 1; i <= nLegacy; i++)
+            DescribePixelFormat(dc, i, sizeof(PIXELFORMATDESCRIPTOR), &d);
+        const double after = ms_now();
+        g_last = before;
+        step("DescribePixelFormat for every format, the older way");
+        if (nLegacy > 0)
+            printf("               %.2f ms per format, %d of them\n",
+                   (after - before) / nLegacy, nLegacy);
     }
 
     if (chooseARB) {
