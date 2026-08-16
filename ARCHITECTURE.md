@@ -105,7 +105,11 @@ another point. Come in, stay, go out is three ramps or four points, and as
 points any one of them drags without disturbing the others.
 
 Two points are a fade. Four are a fade in and out. Sixty-five are a sine, which
-is what the presets are for. Outside the curve the level *holds* at the nearest
+is what the presets are for. A preset is told where to go by four rules, most
+specific first — a stretch marked out with Shift, the clips selected on that
+track, the clip under the pointer, the whole track — and the menu rows name the
+one that won, because a menu that silently applies to a range you did not have
+in mind is worse than one that makes you read four extra words. Outside the curve the level *holds* at the nearest
 point's value rather than springing back, because a fade out that undid itself
 the moment it finished would be useless for what fades are mostly for.
 

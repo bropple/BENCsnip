@@ -1416,7 +1416,11 @@ static void keys(App &a)
     /* F12 is not handled here on purpose: raylib takes the screenshot itself,
      * into screenshot000.png beside the program, and a second handler on the
      * same key writes a second copy of the same picture. */
-    if (IsKeyPressed(KEY_ESCAPE)) a.clearSel();
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        a.clearSel();
+        a.fxSel = App::FxRef{};
+        a.fxSweepTrack = -1;      /* the band means nothing once it is let go */
+    }
 
     if (IsKeyPressed(KEY_M)) {
         for (const ClipRef &r : a.sel)

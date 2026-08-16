@@ -85,7 +85,10 @@ middle piece and press **Shift+Delete**. Then **Ctrl+E**.
   pictures do, because it is the same number — and on an audio track it is the
   level. Right-click for the shapes worth having a name for: fade in, fade
   out, in and out, a square pulse, a sine wave. A point can be told to *hold*,
-  which is what makes a square square.
+  which is what makes a square square. A preset goes over the stretch you
+  marked with Shift and a drag, or the clips you selected, or the clip you
+  right-clicked, or the whole track — whichever of those you actually did, and
+  the menu says which.
 * **Channels, when you want them.** A file's audio arrives as one clip
   however many channels it has — the bin says mono, stereo or how many — and
   right-clicking it offers to split them apart, one mono clip per channel,

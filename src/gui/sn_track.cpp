@@ -405,9 +405,19 @@ static void draw_fx(App &a, int idx)
 {
     if (idx < 0 || idx >= (int)a.proj.tracks.size()) return;
     const Track &t = a.proj.tracks[idx];
-    if (t.fx.empty()) return;
-
     Rectangle fr = fx_rect(a, idx);
+
+    /* The stretch marked out with Shift, if it is this lane's. Drawn before
+     * the curve so the curve stays readable over it. */
+    if (a.fxSweepTrack == idx && a.fxSweepTo > a.fxSweepFrom) {
+        const float x0 = a.xAt(a.fxSweepFrom), x1 = a.xAt(a.fxSweepTo);
+        DrawRectangleRec(Rectangle{x0, fr.y, x1 - x0, fr.height},
+                         Color{0x78, 0xb9, 0x46, 45});
+        DrawLineEx(Vector2{x0, fr.y}, Vector2{x0, fr.y + fr.height}, 1.0f, SN_ACCENT);
+        DrawLineEx(Vector2{x1, fr.y}, Vector2{x1, fr.y + fr.height}, 1.0f, SN_ACCENT);
+    }
+
+    if (t.fx.empty()) return;
     const float bot = fr.y + fr.height - 4;
 
     /* The line the curve makes, and the area under it, so a level reads as an
@@ -874,9 +884,7 @@ void timelinePane(App &a, Rectangle r)
             break;
         }
         case DRAG_TRIM_IN:
-        case DRAG_FX_IN:
-        case DRAG_FX_OUT:
-        case DRAG_FX_NEW: sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW); break;
+        case DRAG_FX_SWEEP: sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW); break;
         case DRAG_FX: sn_cursor(&ui, MOUSE_CURSOR_RESIZE_ALL); break;
         case DRAG_GAIN:     sn_cursor(&ui, MOUSE_CURSOR_RESIZE_NS); break;
         case DRAG_CLIP:     sn_cursor(&ui, MOUSE_CURSOR_RESIZE_ALL); break;
@@ -897,9 +905,7 @@ void timelinePane(App &a, Rectangle r)
         break;
     }
     case DRAG_TRIM_IN:
-    case DRAG_FX_IN:
-    case DRAG_FX_OUT:
-    case DRAG_FX_NEW:
+    case DRAG_FX_SWEEP:
     case DRAG_SCRUB:    sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW); break;
     case DRAG_GAIN:     sn_cursor(&ui, MOUSE_CURSOR_RESIZE_NS); break;
     case DRAG_CLIP:
@@ -940,25 +946,46 @@ void timelinePane(App &a, Rectangle r)
              * first point on an empty lane and the ninth on a busy one are
              * the same gesture, and there is no mode to be in. */
             Track &t = a.proj.tracks[fxLane];
-            int k = fx_point_at(a, fxLane, m);
+            const bool sweeping = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
 
-            if (k < 0) {
-                FxPoint np;
-                np.t = std::max(0.0, snap_time(a, a.timeAt(m.x), nullptr));
-                np.v = fx_v_of(a, fxLane, m.y);
-                t.fx.push_back(np);
-                fxTidy(t);
+            if (sweeping) {
+                /* Shift marks out a stretch for a preset to be applied over,
+                 * rather than adding a point. The other ways of saying where
+                 * a preset goes are all somebody else's idea of a range - the
+                 * selection, the clip under the pointer, the whole track -
+                 * and sometimes the one wanted is none of them. */
+                a.fxSweepTrack = fxLane;
+                a.fxSweepFrom = a.fxSweepTo = std::max(0.0, a.timeAt(m.x));
+                a.fxSel = App::FxRef{};
+                a.dragFrom = m;
+                a.dragMoved = false;
+                a.drag = DRAG_FX_SWEEP;
+            } else {
+                int k = fx_point_at(a, fxLane, m);
 
-                k = -1;
-                for (size_t i = 0; i < t.fx.size(); i++)
-                    if (std::fabs(t.fx[i].t - np.t) < 1e-9) k = (int)i;
+                /* A plain press puts a point down, and drops any swept range:
+                 * the band would otherwise sit there long after it meant
+                 * anything. */
+                a.fxSweepTrack = -1;
+
+                if (k < 0) {
+                    FxPoint np;
+                    np.t = std::max(0.0, snap_time(a, a.timeAt(m.x), nullptr));
+                    np.v = fx_v_of(a, fxLane, m.y);
+                    t.fx.push_back(np);
+                    fxTidy(t);
+
+                    k = -1;
+                    for (size_t i = 0; i < t.fx.size(); i++)
+                        if (std::fabs(t.fx[i].t - np.t) < 1e-9) k = (int)i;
+                }
+
+                a.fxSel = App::FxRef{fxLane, k};
+                a.fxDrag = a.fxSel;
+                a.dragFrom = m;
+                a.dragMoved = false;
+                a.drag = DRAG_FX;
             }
-
-            a.fxSel = App::FxRef{fxLane, k};
-            a.fxDrag = a.fxSel;
-            a.dragFrom = m;
-            a.dragMoved = false;
-            a.drag = DRAG_FX;
         } else if (overClip.ok() && !a.proj.tracks[overClip.track].locked) {
             const Clip *c = a.proj.clip(overClip);
             a.select(overClip, IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT));
@@ -1014,6 +1041,13 @@ void timelinePane(App &a, Rectangle r)
             double t = snap_time(a, a.timeAt(m.x), &a.dragClip);
             trimClip(a.proj, a.dragClip, a.drag == DRAG_TRIM_IN, t);
             a.changed(true);
+            break;
+        }
+        case DRAG_FX_SWEEP: {
+            const double now = std::max(0.0, snap_time(a, a.timeAt(m.x), nullptr));
+            const double at0 = std::max(0.0, a.timeAt(a.dragFrom.x));
+            a.fxSweepFrom = std::min(at0, now);
+            a.fxSweepTo = std::max(at0, now);
             break;
         }
         case DRAG_FX: {
@@ -1113,32 +1147,85 @@ void timelinePane(App &a, Rectangle r)
 
     /* --- right-click the effects lane --- */
     if (inside && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && fxLane >= 0) {
+        /* --- where a preset would go ---
+         *
+         * Four answers, most specific first, because each is a narrower claim
+         * about what somebody meant than the one after it:
+         *
+         *   a stretch marked out with Shift    they said exactly
+         *   the clips selected on this track   they pointed at it
+         *   the clip under the pointer         they right-clicked on it
+         *   everything on the track            there is nothing else to mean
+         *
+         * The rows say which one it landed on. A menu that silently applies
+         * to a range you did not have in mind is worse than one that makes
+         * you read four extra words.
+         */
+        const Track &ft = a.proj.tracks[fxLane];
+        const char *what = nullptr;
+        a.fxRangeFrom = a.fxRangeTo = 0.0;
+
+        if (a.fxSweepTrack == fxLane && a.fxSweepTo > a.fxSweepFrom) {
+            a.fxRangeFrom = a.fxSweepFrom;
+            a.fxRangeTo = a.fxSweepTo;
+            what = "the marked stretch";
+        }
+
+        if (!what) {
+            double lo = 0, hi = 0;
+            bool any = false;
+            for (const ClipRef &sr : a.sel) {
+                if (sr.track != fxLane) continue;
+                const Clip *sc = a.proj.clip(sr);
+                if (!sc) continue;
+                if (!any) { lo = sc->pos; hi = sc->end(); any = true; }
+                else { lo = std::min(lo, sc->pos); hi = std::max(hi, sc->end()); }
+            }
+            if (any && hi > lo) {
+                a.fxRangeFrom = lo;
+                a.fxRangeTo = hi;
+                what = a.sel.size() > 1 ? "the selected clips" : "the selected clip";
+            }
+        }
+
+        if (!what) {
+            const Clip *c = ft.at(a.timeAt(m.x));
+            if (c) {
+                a.fxRangeFrom = c->pos;
+                a.fxRangeTo = c->end();
+                what = "this clip";
+            }
+        }
+
+        if (!what && !ft.clips.empty()) {
+            a.fxRangeFrom = ft.clips.front().pos;
+            a.fxRangeTo = ft.clips.back().end();
+            what = "the whole track";
+        }
+
         const int k = fx_point_at(a, fxLane, m);
         a.fxSel = App::FxRef{fxLane, k};
 
-        /* Where a preset would go: the clip under the pointer on this track,
-         * because "make this bit pulse" is what somebody reaching for one
-         * means. With nothing under the pointer there is nothing to shape,
-         * and the rows that need a range are left out. */
-        const double at = a.timeAt(m.x);
-        const Clip *c = a.proj.tracks[fxLane].at(at);
-        a.fxRangeFrom = c ? c->pos : 0.0;
-        a.fxRangeTo = c ? c->end() : 0.0;
-
-        static const char *fitems[8];
+        static const char *fitems[10];
+        static char rows[5][64];
         int n = 0;
         a.fxMenu.clear();
-        auto add = [&](const char *label, App::FxAction what) {
+        auto add = [&](const char *label, App::FxAction act) {
             fitems[n++] = label;
-            a.fxMenu.push_back((int)what);
+            a.fxMenu.push_back((int)act);
         };
 
-        if (c) {
-            add("fade in over this clip", App::FX_M_IN);
-            add("fade out over this clip", App::FX_M_OUT);
-            add("in and out over this clip", App::FX_M_INOUT);
-            add("pulse it", App::FX_M_PULSE);
-            add("wave over it", App::FX_M_WAVE);
+        if (what) {
+            static const char *shape[5] = {"fade in over", "fade out over",
+                                           "in and out over", "pulse over",
+                                           "wave over"};
+            static const App::FxAction acts[5] = {App::FX_M_IN, App::FX_M_OUT,
+                                                  App::FX_M_INOUT, App::FX_M_PULSE,
+                                                  App::FX_M_WAVE};
+            for (int i = 0; i < 5; i++) {
+                snprintf(rows[i], sizeof rows[i], "%s %s", shape[i], what);
+                add(rows[i], acts[i]);
+            }
         }
         if (k >= 0) {
             if (n) add("-", App::FX_M_NOTHING);
@@ -1327,12 +1414,21 @@ void timelinePane(App &a, Rectangle r)
                                    ? (c->looped()
                                           ? "drag to change how many times it repeats"
                                           : "drag to trim the end, or past it to loop")
-                               : overWhat == DRAG_FX_IN  ? "drag the start of the ramp"
-                               : overWhat == DRAG_FX_OUT ? "drag the end of the ramp"
+                               : overWhat == DRAG_FX ? "drag the point about"
                                : overWhat == DRAG_GAIN     ? "drag the level up or down"
                                                            : "drag to move it";
             sn_tip(&ui, "%s  %s of %s  -  %s", b->info.name.c_str(),
                    fmtTime(c->dur()).c_str(), fmtTime(b->info.duration).c_str(), verb);
+        }
+    } else if (inside && fxLane >= 0 && a.drag == DRAG_NONE) {
+        const Track &ht = a.proj.tracks[fxLane];
+        if (fx_point_at(a, fxLane, m) >= 0) {
+            sn_cursor(&ui, MOUSE_CURSOR_RESIZE_ALL);
+            sn_tip(&ui, "drag the point about - right-click to hold it or remove it");
+        } else {
+            sn_tip(&ui, "%s effects: click to add a point, Shift-drag to mark a "
+                        "stretch, right-click for shapes",
+                   ht.name.c_str());
         }
     } else if (inside && m.y < r.y + RULER_H) {
         sn_tip(&ui, "drag to scrub");

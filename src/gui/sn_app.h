@@ -37,10 +37,8 @@ enum DragKind {
     DRAG_CLIP,        /* moving a clip                          */
     DRAG_TRIM_IN,     /* its left edge                          */
     DRAG_TRIM_OUT,    /* its right edge                         */
-    DRAG_FX,          /* a ramp on the effects lane, moved      */
-    DRAG_FX_IN,       /* ...its left end                        */
-    DRAG_FX_OUT,      /* ...its right end                       */
-    DRAG_FX_NEW,      /* ...or one being drawn from nothing     */
+    DRAG_FX,          /* a point on the effects lane, moved     */
+    DRAG_FX_SWEEP,    /* ...or a stretch of it being marked out */
     DRAG_GAIN,        /* the level line across an audio clip    */
     DRAG_SCRUB,       /* the playhead, from the ruler           */
     DRAG_FROM_BIN,    /* a bin item on its way to the timeline  */
@@ -136,6 +134,17 @@ struct App {
     };
     std::vector<int> fxMenu;
     double fxRangeFrom = 0, fxRangeTo = 0;   /* what a preset would cover */
+
+    /* A stretch of one lane marked out with Shift and the mouse, for a preset
+     * to be applied over. -1 for the track when there is none.
+     *
+     * It exists because the other three ways of saying where a preset goes -
+     * the selection, the clip under the pointer, the whole track - are all
+     * somebody else's idea of a range, and sometimes the range wanted is not
+     * any of them. */
+    int fxSweepTrack = -1;
+    double fxSweepFrom = 0, fxSweepTo = 0;
+    bool fxSweepOk() const { return fxSweepTrack >= 0 && fxSweepTo > fxSweepFrom; }
 
     /* Which point on which effects lane is selected, and which is being
      * dragged. An index rather than an id: effects are a small sorted vector
