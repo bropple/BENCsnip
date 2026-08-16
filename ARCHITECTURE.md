@@ -263,6 +263,14 @@ it, scrubbing, and opening it again. Everything in it lays out down one narrow
 lane, which is what makes narrow work — two columns of controls in three
 hundred pixels is two columns of six characters.
 
+How the drawers were left is the one thing this program remembers between
+runs, in a `key value` file under the platform's own settings directory —
+`%APPDATA%\BENCO\BENCsnip`, `~/Library/Application Support/BENCsnip`,
+`$XDG_CONFIG_HOME/bencsnip`. `sn_prefs` deliberately does not include `sn_app.h`:
+on Windows it reaches for the platform's settings path, and App drags in raylib,
+which cannot share a translation unit with `windows.h` — the two have a
+`Rectangle`, a `CloseWindow` and a `ShowCursor` each.
+
 Immediate mode, drawn with raylib, no toolkit. The BENCO look is flat fills,
 thin dim borders and small radii, which is what an immediate-mode renderer
 produces by default and what a native widget set would have to be argued out of

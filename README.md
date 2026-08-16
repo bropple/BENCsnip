@@ -67,7 +67,8 @@ middle piece and press **Shift+Delete**. Then **Ctrl+E**.
 * **Two panels that get out of the way.** The media bin on the left and the
   inspector on the right slide out of a tab at the edge, sit *beside* the
   picture rather than over it, and close themselves five seconds after you
-  leave — or stay for good if you pin them. Everything about a video layer or
+  leave — or stay for good if you pin them. Both come up next time the way you
+  left them; the information window says where that is remembered. Everything about a video layer or
   a caption is in the right-hand one, adjustable while the thing you are
   adjusting is on screen and the transport still works. Every slider has a box
   beside it: drag for roughly, type for exactly.

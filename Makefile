@@ -59,6 +59,7 @@ GUI_SRC  := src/gui/main.cpp \
             src/gui/sn_filedlg.cpp \
             src/gui/sn_appmenu.cpp \
             src/gui/sn_colordlg.cpp \
+            src/gui/sn_prefs.cpp \
             src/gui/sn_dialog.cpp \
             src/gui/sn_peaks.cpp
 GUI_OBJ  := $(GUI_SRC:.cpp=.o)

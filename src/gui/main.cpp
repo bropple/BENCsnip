@@ -25,6 +25,7 @@
 #include "sn_appmenu.h"
 #include "sn_embed.h"
 #include "sn_filedlg.h"
+#include "sn_prefs.h"
 #include "sn_version.h"
 
 #include <algorithm>
@@ -1943,8 +1944,23 @@ static int run(int argc, char **argv)
     /* The font before anything else. Everything this program draws is drawn
      * with it, and it costs a millisecond and a half. */
     App a;
-    a.bin.open = a.bin.pinned = true;
-    a.bin.w = (float)BIN_W;
+
+    /* How the drawers were left last time. First run has no file and the
+     * defaults in Prefs apply: both out, both pinned. They are set to their
+     * full width rather than slid open, because a window that opens and then
+     * animates itself into shape reads as the program still loading. */
+    {
+        Prefs pr;
+        prefsLoad(&pr);
+        a.bin.open = pr.binOpen;
+        a.bin.pinned = pr.binPinned;
+        a.bin.w = pr.binOpen ? (float)BIN_W : 0.0f;
+        a.inspect.open = pr.inspectOpen;
+        a.inspect.pinned = pr.inspectPinned;
+        a.inspect.w = pr.inspectOpen ? (float)INSPECT_W : 0.0f;
+        a.inspectPage = pr.inspectPage;
+    }
+
     sn_ui_init(&a.ui);
     mark("font");
     first_frame();
@@ -2216,6 +2232,19 @@ static int run(int argc, char **argv)
     }
 
     /* --- shutdown --- */
+    {
+        /* How they are now, for next time. An unpinned drawer that has closed
+         * itself is saved closed, which is the honest answer: it is where the
+         * person left it, and it will be one click away again. */
+        Prefs pr;
+        pr.binOpen = a.bin.open;
+        pr.binPinned = a.bin.pinned;
+        pr.inspectOpen = a.inspect.open;
+        pr.inspectPinned = a.inspect.pinned;
+        pr.inspectPage = a.inspectPage;
+        prefsSave(pr);
+    }
+
     if (a.exStatus.running.load()) a.exStatus.cancel.store(true);
     if (a.exThread && a.exThread->joinable()) a.exThread->join();
 

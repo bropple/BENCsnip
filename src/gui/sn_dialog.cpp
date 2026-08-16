@@ -12,6 +12,7 @@
 
 #include "sn_app.h"
 #include "sn_colordlg.h"
+#include "sn_prefs.h"
 #include "sn_embed.h"
 #include "sn_filedlg.h"
 #include "sn_version.h"
@@ -840,6 +841,7 @@ const HelpRow HELP[] = {
     {"", "they slide out beside the picture rather than over it"},
     {"", "and close themselves five seconds after you leave"},
     {"the pin", "in a panel's header keeps it open for good"},
+    {"", "how you leave them is how they come back next time"},
     {"Esc", "select nothing - clips, pictures and captions all at once"},
     {"every slider", "has a box beside it - drag for roughly, type for exactly"},
     {"", nullptr},
@@ -1573,6 +1575,15 @@ void infoWindow(App &a)
         snprintf(line, sizeof line, "%.0f ms to the window, %.0f ms to ready",
                  startupWindowMs(), startupReadyMs());
         row("startup", line);
+
+        /* Where the drawers' state is kept. One line, because "it opened with
+         * the panel shut and I do not know why" has one answer and it is a
+         * file somebody can look at or delete. */
+        {
+            const std::string sp = prefsPath();
+            row("settings", sp.empty() ? "nowhere - this machine will not say"
+                                       : sp.c_str());
+        }
 
         ly += 8;
         sn_text(&ui, SN_F_TINY, "S. Tarr is BENCO's audio/visual person. He is drawn,",
