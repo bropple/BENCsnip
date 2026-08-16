@@ -79,11 +79,18 @@ bool canStreamCopy(const Project &p, const ExportSettings &s, std::string *why)
         if (std::fabs(c->in - cl[0]->in) > 1e-6 || std::fabs(c->out - cl[0]->out) > 1e-6 ||
             std::fabs(c->pos - cl[0]->pos) > 1e-6)
             return no("the clips have been cut apart");
-        if (c->fadeIn > 0 || c->fadeOut > 0) return no("there is a fade on it");
         if (std::fabs(c->gain - 1.0) > 1e-6) return no("the volume was changed");
         if (c->muted) return no("something is muted");
     }
     if (cl.size() > 2) return no("more than one clip is on the timeline");
+
+    /* Anything on an effects lane is a picture or a level this program has to
+     * compute, and a stream copy computes nothing. Checked per track rather
+     * than per clip because that is where effects live now. */
+    for (const Track &t : p.tracks) {
+        if (!t.fx.empty()) return no("there is an effect on it");
+        if (std::fabs(t.gain - 1.0) > 1e-6) return no("a track level was changed");
+    }
 
     const BinItem *b = p.item(src);
     if (!b || b->missing) return no("the file is missing");

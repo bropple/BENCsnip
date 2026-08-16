@@ -32,6 +32,23 @@ Clip *Track::at(double t)
     return const_cast<Clip *>(static_cast<const Track *>(this)->at(t));
 }
 
+double Track::fxAt(double t) const
+{
+    if (fx.empty()) return 1.0;
+
+    /* The ramps are sorted and do not overlap, so the answer is the one that
+     * covers t - and where none does, the one before it, held at the level it
+     * finished on. Before the first, nothing has happened yet. */
+    double v = 1.0;
+    bool started = false;
+    for (const Fx &f : fx) {
+        if (f.from > t) break;
+        v = f.at(t);
+        started = true;
+    }
+    return started ? v : 1.0;
+}
+
 bool Track::transformed() const
 {
     return std::fabs(scaleX - 1.0) > 1e-6 || std::fabs(scaleY - 1.0) > 1e-6 ||
@@ -301,14 +318,12 @@ static void clear_range(Track &t, double a, double b, int ignoreId)
         if (headKept) {
             Clip h = c;
             h.out = h.in + (a - h.pos);
-            h.fadeOut = std::min(h.fadeOut, h.dur());
             out.push_back(h);
         }
         if (tailKept) {
             Clip tl = c;
             tl.in = tl.in + (b - tl.pos);
             tl.pos = b;
-            tl.fadeIn = std::min(tl.fadeIn, tl.dur());
             if (headKept) tl.id = 0;   /* caller renumbers - see addClip */
             out.push_back(tl);
         }
@@ -541,8 +556,6 @@ void trimClip(Project &p, const ClipRef &r, bool head, double newEdge)
             }
         }
 
-        x->fadeIn = std::min(x->fadeIn, x->dur());
-        x->fadeOut = std::min(x->fadeOut, x->dur());
         sort_track(*t);
     }
     p.dirty = true;
@@ -566,7 +579,6 @@ int splitAt(Project &p, double t, const ClipRef *only)
             tail.id = p.newId();
             tail.in = c.srcAt(t);
             tail.pos = t;
-            tail.fadeIn = 0;
             /* A split breaks the link: the two halves are separate clips
              * now, and dragging one should not drag the other. The video and
              * audio halves of the same split keep their own pairing, which is
@@ -574,7 +586,6 @@ int splitAt(Project &p, double t, const ClipRef *only)
             tail.link = c.link ? p.newId() : 0;
 
             c.out = tail.in;
-            c.fadeOut = 0;
 
             add.push_back(tail);
             n++;

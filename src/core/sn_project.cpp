@@ -178,10 +178,21 @@ bool saveProject(const Project &p, const std::string &path, std::string *err)
          * that a project nobody has touched the levels of is byte for byte the
          * file it was before this existed. */
         if (t.gain != 1.0) fprintf(f, "level %.6f\n", t.gain);
+
+        /* One line per effect, after the track and before its clips. */
+        for (const Fx &x : t.fx)
+            fprintf(f, "fx %d %.6f %.6f %.6f %.6f\n", (int)x.kind, x.from, x.to, x.a,
+                    x.b);
         for (const Clip &c : t.clips) {
+            /* The two zeroes are where a clip's fadeIn and fadeOut used to
+             * be. The fields stay so that the eleven numbers on this line
+             * keep their positions - a reader that predates the effects lane
+             * still finds `repeat` where it expects it - and they are written
+             * as nothing because there is nothing there any more. Fades are
+             * on the track now; see the `fx` lines below. */
             fprintf(f, "clip %d %d %d %.6f %.6f %.6f %.4f %.4f %.4f %d %.6f\n",
                     c.id, c.source, c.link, c.in, c.out, c.pos, c.gain,
-                    c.fadeIn, c.fadeOut, c.muted ? 1 : 0, c.repeat);
+                    0.0, 0.0, c.muted ? 1 : 0, c.repeat);
 
             /* What a caption says and how it looks, on its own lines after
              * the clip they belong to - the arrangement `xform` and `level`
@@ -241,6 +252,7 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
     const std::string dir = dirname_of(path);
 
     int trackAt = -1;
+    int droppedFades = 0;
     int clipAt = -1;   /* which clip the tstyle/tfont/tstr lines belong to */
 
     while (fgets(line, sizeof line, f)) {
@@ -304,6 +316,15 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
                                    &t.cropB, &t.scaleY, &stretch);
             if (got < 8) t.scaleY = t.scaleX;
             t.stretch = stretch != 0;
+        } else if (!strncmp(line, "fx ", 3)) {
+            if (trackAt < 0) continue;
+            Fx x;
+            int kind = 0;
+            if (sscanf(line + 3, "%d %lf %lf %lf %lf", &kind, &x.from, &x.to, &x.a,
+                       &x.b) < 5)
+                continue;
+            x.kind = FX_FADE;              /* the only one there is, so far */
+            if (x.to > x.from) p.tracks[trackAt].fx.push_back(x);
         } else if (!strncmp(line, "level ", 6)) {
             if (trackAt < 0) continue;
             double g = 1.0;
@@ -319,10 +340,19 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
             /* The repeat count is the eleventh field and arrived later, so a
              * file without one is a file from before looping existed and
              * means once. */
+            double fadeIn = 0, fadeOut = 0;
             if (sscanf(line + 5, "%d %d %d %lf %lf %lf %lf %lf %lf %d %lf",
                        &c.id, &c.source, &c.link, &c.in, &c.out, &c.pos,
-                       &c.gain, &c.fadeIn, &c.fadeOut, &muted, &c.repeat) < 10)
+                       &c.gain, &fadeIn, &fadeOut, &muted, &c.repeat) < 10)
                 continue;
+
+            /* Fades used to live here, two numbers on every clip. They are
+             * read and dropped rather than turned into ramps on the track's
+             * effects lane, which is what the person who asked for the lane
+             * asked for. Counted, so that a project which comes back looking
+             * different can be told why instead of leaving somebody to
+             * wonder. */
+            if (fadeIn > 0.0 || fadeOut > 0.0) droppedFades++;
             if (!(c.repeat > 0)) c.repeat = 1.0;
             c.muted = muted != 0;
             if (c.dur() > 0) {
@@ -363,9 +393,17 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
     }
     p.nextId = maxId + 1;
 
-    for (Track &t : p.tracks)
+    for (Track &t : p.tracks) {
         std::sort(t.clips.begin(), t.clips.end(),
                   [](const Clip &a, const Clip &b) { return a.pos < b.pos; });
+        std::sort(t.fx.begin(), t.fx.end(),
+                  [](const Fx &a, const Fx &b) { return a.from < b.from; });
+    }
+
+    if (droppedFades && err)
+        *err = std::to_string(droppedFades) +
+               (droppedFades == 1 ? " fade was" : " fades were") +
+               " dropped: fades are on the effects lane now";
 
     p.dirty = false;
     *out = p;

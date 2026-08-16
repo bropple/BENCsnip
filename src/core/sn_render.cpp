@@ -12,18 +12,10 @@
 
 namespace sn {
 
-double fadeGain(const Clip &c, double t)
+double fxGain(const Track &t, double at)
 {
-    double g = 1.0;
-    if (c.fadeIn > 0) {
-        double x = (t - c.pos) / c.fadeIn;
-        if (x < 1.0) g = std::min(g, std::max(0.0, x));
-    }
-    if (c.fadeOut > 0) {
-        double x = (c.end() - t) / c.fadeOut;
-        if (x < 1.0) g = std::min(g, std::max(0.0, x));
-    }
-    return g;
+    const double g = t.fxAt(at);
+    return g < 0.0 ? 0.0 : (g > 1.0 ? 1.0 : g);
 }
 
 Renderer::~Renderer()
@@ -134,7 +126,7 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
          * makes a caption something you can put behind one layer and in front
          * of another rather than a thing that is always on top. */
         if (tr.kind == TRACK_TEXT) {
-            const double g = fadeGain(*c, t);
+            const double g = fxGain(tr, t);
             if (g > 0.0 && !c->muted && !c->text.text.empty()) {
                 TextLayer &tl = m_text[tr.id];
                 if (!tl.matches(c->text, w, h)) buildTextLayer(c->text, w, h, &tl);
@@ -215,7 +207,7 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
         const int cx = (int)std::lround(tr.cropL * layer.w);
         const int cy = (int)std::lround(tr.cropT * layer.h);
 
-        const double g = fadeGain(*c, t);
+        const double g = fxGain(tr, t);
         if (g <= 0.0) { any = true; continue; }
 
         /* Clipped against the canvas on all four sides: a track pushed off
@@ -339,19 +331,23 @@ void Renderer::audioAt(double t, int frames, float *dst)
 
             s->audioAt(c.srcAt(a), n, m_mix.data());
 
-            /* Fades are evaluated per sample rather than per block: a fade
-             * shorter than a block would otherwise be a step, and a step in
-             * a gain is a click. */
-            const bool ramp = c.fadeIn > 0 || c.fadeOut > 0;
+            /* The track's fx are evaluated per sample rather than per block:
+             * a ramp shorter than a block would otherwise be a step, and a
+             * step in a gain is a click. Only when there is one - which is
+             * almost never - because that loop costs a multiply and a branch
+             * per sample and the flat path is a straight scale. */
+            bool ramp = false;
+            for (const Fx &f : tr.fx)
+                if (f.from < b && a < f.to) { ramp = true; break; }
             float *o = dst + (size_t)off * CHANS;
 
             if (!ramp) {
-                const float g = (float)gain;
+                const float g = (float)(gain * fxGain(tr, a));
                 for (int i = 0; i < n * CHANS; i++) o[i] += m_mix[i] * g;
             } else {
                 for (int i = 0; i < n; i++) {
                     const double ts = a + i / (double)RATE;
-                    const float g = (float)(gain * fadeGain(c, ts));
+                    const float g = (float)(gain * fxGain(tr, ts));
                     o[i * CHANS + 0] += m_mix[i * CHANS + 0] * g;
                     o[i * CHANS + 1] += m_mix[i * CHANS + 1] * g;
                 }

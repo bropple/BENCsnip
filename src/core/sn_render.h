@@ -89,10 +89,10 @@ private:
     std::map<int, TextLayer> m_text;
 };
 
-/* The multiplier a clip's fades put on it at timeline time t: 1 in the middle,
- * ramping at the ends. Shared by the mixer and the compositor so a video fade
- * and its audio fade are the same shape. */
-double fadeGain(const Clip &c, double t);
+/* What a track's effects lane puts its output at, at timeline time t, clamped
+ * to 0..1. Shared by the mixer and the compositor, so a fade on a video track
+ * and a fade on an audio track are the same shape and the same code. */
+double fxGain(const Track &t, double at);
 
 } /* namespace sn */
 

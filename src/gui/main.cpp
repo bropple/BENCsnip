@@ -202,6 +202,10 @@ void doImport(App &a, const std::string &path, bool place)
      * imported as media, which is what dropping one obviously means. */
     if (path.size() > 9 && path.compare(path.size() - 9, 9, ".bencsnip") == 0) {
         Project p;
+        /* loadProject fills `err` on success too, when it had to leave
+         * something behind - a fade from a project written before the effects
+         * lane existed. Worth saying: a project that comes back looking
+         * different should say why rather than leave somebody to wonder. */
         if (loadProject(&p, path, &err)) {
             a.proj = p;
             a.hist.reset(a.proj);
@@ -210,7 +214,8 @@ void doImport(App &a, const std::string &path, bool place)
             a.sel.clear();
             a.changed(true);
             zoomFit(a);
-            a.say("opened %s", GetFileName(path.c_str()));
+            if (err.empty()) a.say("opened %s", GetFileName(path.c_str()));
+            else a.complain("opened %s - %s", GetFileName(path.c_str()), err.c_str());
         } else {
             a.complain("%s", err.c_str());
         }
@@ -1468,7 +1473,21 @@ static void menus(App &a)
         case 1: doDelete(a, false); break;
         case 2: doDelete(a, true); break;
         case 4: c->muted = !c->muted; a.changed(); break;
-        case 5: c->fadeIn = c->fadeOut = 0; a.changed(); a.say("fades cleared"); break;
+        case 5: {
+            /* Fades are on the track's lane now, so this clears the lane
+             * rather than two numbers on the clip. It is still offered from a
+             * clip's menu because that is where somebody looking to undo a
+             * fade will right-click. */
+            Track *t = a.proj.track(r.track);
+            if (t && !t->fx.empty()) {
+                const int n = (int)t->fx.size();
+                t->fx.clear();
+                a.changed();
+                a.say("cleared %d effect%s from %s", n, n == 1 ? "" : "s",
+                      t->name.c_str());
+            }
+            break;
+        }
         case 6: {
             /* Unlink. Every clip that shares the link id loses it, which is
              * both halves and no more: a split earlier gave each pair its own
@@ -1485,6 +1504,24 @@ static void menus(App &a)
             break;
         }
         default: break;
+        }
+        return;
+    }
+
+    if (tag == 102) {                     /* a ramp on an effects lane */
+        Track *t = a.proj.track(a.fxSel.track);
+        if (!t || a.fxSel.index < 0 || a.fxSel.index >= (int)t->fx.size()) return;
+        Fx &f = t->fx[(size_t)a.fxSel.index];
+
+        if (pick == 0) {
+            std::swap(f.a, f.b);
+            a.changed();
+            a.say("turned it the other way");
+        } else if (pick == 1) {
+            t->fx.erase(t->fx.begin() + a.fxSel.index);
+            a.fxSel = App::FxRef{};
+            a.changed();
+            a.say("effect deleted");
         }
         return;
     }

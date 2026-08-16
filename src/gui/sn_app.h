@@ -37,8 +37,10 @@ enum DragKind {
     DRAG_CLIP,        /* moving a clip                          */
     DRAG_TRIM_IN,     /* its left edge                          */
     DRAG_TRIM_OUT,    /* its right edge                         */
-    DRAG_FADE_IN,     /* the fade handle at the top left        */
-    DRAG_FADE_OUT,
+    DRAG_FX,          /* a ramp on the effects lane, moved      */
+    DRAG_FX_IN,       /* ...its left end                        */
+    DRAG_FX_OUT,      /* ...its right end                       */
+    DRAG_FX_NEW,      /* ...or one being drawn from nothing     */
     DRAG_GAIN,        /* the level line across an audio clip    */
     DRAG_SCRUB,       /* the playhead, from the ruler           */
     DRAG_FROM_BIN,    /* a bin item on its way to the timeline  */
@@ -97,6 +99,19 @@ struct App {
                                   clip's start, so it does not jump      */
     Vector2 dragFrom = {0, 0};
     bool dragMoved = false;
+
+    /* Which ramp on which effects lane is selected, and which is being
+     * dragged. An index rather than an id: effects are a small sorted vector
+     * on a track and nothing outside this refers to one. */
+    struct FxRef {
+        int track = -1;
+        int index = -1;
+        bool ok() const { return track >= 0 && index >= 0; }
+    };
+    FxRef fxSel;
+    FxRef fxDrag;
+    double fxGrabFrom = 0, fxGrabTo = 0;   /* the ramp when the drag began */
+    double fxNewAt = 0;                    /* where a new one was started  */
 
     /* Which track's level fader is being dragged, or -1. It is not one of the
      * drags above because the fader is a widget and does its own dragging;

@@ -249,6 +249,33 @@ static void test_loop()
     CHECK(NEAR(once.srcAt(6.0), 6.0, 1e-9), "a clip that plays once does not wrap");
 }
 
+/* ------------------------------------------------------------------ *
+ * The effects lane
+ * ------------------------------------------------------------------ */
+
+static void test_fx()
+{
+    printf("effects\n");
+
+    sn::Track t;
+    CHECK(NEAR(t.fxAt(0.0), 1.0, 1e-9), "an empty lane changes nothing");
+
+    /* Up from nothing over two seconds, then down again later. */
+    t.fx.push_back(sn::Fx{sn::FX_FADE, 1.0, 3.0, 0.0, 1.0});
+    t.fx.push_back(sn::Fx{sn::FX_FADE, 8.0, 9.0, 1.0, 0.0});
+
+    CHECK(NEAR(t.fxAt(0.5), 1.0, 1e-9), "before the first ramp, nothing has happened");
+    CHECK(NEAR(t.fxAt(1.0), 0.0, 1e-9), "it starts where it says");
+    CHECK(NEAR(t.fxAt(2.0), 0.5, 1e-9), "and is halfway at halfway");
+    CHECK(NEAR(t.fxAt(3.0), 1.0, 1e-9), "and finishes where it says");
+
+    /* Between two ramps it holds. A ramp that undid itself the moment it
+     * finished would be useless for the thing fades are mostly for. */
+    CHECK(NEAR(t.fxAt(5.0), 1.0, 1e-9), "between ramps it holds");
+    CHECK(NEAR(t.fxAt(8.5), 0.5, 1e-9), "the second one runs the other way");
+    CHECK(NEAR(t.fxAt(20.0), 0.0, 1e-9), "and after it, it stays down");
+}
+
 static void test_media()
 {
     printf("media\n");
@@ -604,6 +631,38 @@ static void test_render()
     CHECK(f.valid(), "past the end still returns a frame");
     CHECK(f.rgba[0] == 0 && f.rgba[1] == 0 && f.rgba[2] == 0, "and it is black");
 
+    /* --- a ramp on the effects lane fades the picture ---
+     *
+     * Measured as the mean brightness of the frame, which is the one number
+     * that has to move when a fade works and cannot move for any other reason
+     * here: nothing else in this project changes between these three times. */
+    {
+        auto bright = [&](double at) {
+            sn::VideoFrame f;
+            r.videoAt(at, 64, 36, &f);
+            double sum = 0;
+            for (size_t i = 0; i + 3 < f.rgba.size(); i += 4)
+                sum += f.rgba[i] + f.rgba[i + 1] + f.rgba[i + 2];
+            return sum / (double)(f.rgba.size() / 4 * 3);
+        };
+
+        const double plain = bright(1.0);
+        CHECK(plain > 5.0, "there is a picture to fade, %f", plain);
+
+        p.tracks[0].fx.push_back(sn::Fx{sn::FX_FADE, 0.0, 2.0, 0.0, 1.0});
+        const double early = bright(0.05);
+        const double mid = bright(1.0);
+        const double late = bright(1.95);
+        p.tracks[0].fx.clear();
+
+        CHECK(early < plain * 0.15, "the start of a fade in is nearly black, %f vs %f",
+              early, plain);
+        CHECK(mid > plain * 0.3 && mid < plain * 0.7,
+              "its middle is about half, %f vs %f", mid, plain);
+        CHECK(late > plain * 0.85, "and its end is nearly all of it, %f vs %f", late,
+              plain);
+    }
+
     /* --- a caption on the picture ---
      *
      * A text track is composited with the video ones, in list order, which is
@@ -689,17 +748,26 @@ static void test_render()
     for (float v : mix) e += v * v;
     CHECK(e == 0.0, "and silence past the end");
 
-    /* A fade halves the level at its midpoint. */
-    p.tracks[1].clips[0].fadeIn = 2.0;
-    r.audioAt(1.0, 1024, mix.data());
-    double faded = 0;
-    for (float v : mix) faded += v * v;
-    r.audioAt(1.0, 1024, mix.data());   /* same place, fade removed below */
-    p.tracks[1].clips[0].fadeIn = 0.0;
-    r.audioAt(1.0, 1024, mix.data());
-    double full = 0;
-    for (float v : mix) full += v * v;
-    CHECK(faded < full * 0.5, "a fade at its midpoint is quieter, %f vs %f", faded, full);
+    /* A ramp on the track's effects lane halves the level at its midpoint,
+     * and the mixer evaluates it per sample. */
+    {
+        sn::Fx f;
+        f.from = 0.0;
+        f.to = 2.0;
+        f.a = 0.0;
+        f.b = 1.0;
+        p.tracks[1].fx.push_back(f);
+        r.audioAt(1.0, 1024, mix.data());
+        double faded = 0;
+        for (float v : mix) faded += v * v;
+        r.audioAt(1.0, 1024, mix.data());   /* settle: see the note below */
+        p.tracks[1].fx.clear();
+        r.audioAt(1.0, 1024, mix.data());
+        double full = 0;
+        for (float v : mix) full += v * v;
+        CHECK(faded < full * 0.5, "a fade at its midpoint is quieter, %f vs %f",
+              faded, full);
+    }
 
     /* The track's level multiplies the clip's. Half the level is a quarter of
      * the energy, which is the arithmetic and is also the check: a fader
@@ -766,7 +834,8 @@ static void test_project()
 
     p.tracks[ai].clips[0].gain = 0.5;
     p.tracks[ai].gain = 0.75;
-    p.tracks[vi].clips[0].fadeOut = 0.4;
+    p.tracks[vi].fx.push_back(sn::Fx{sn::FX_FADE, 0.25, 1.75, 0.0, 1.0});
+    p.tracks[vi].fx.push_back(sn::Fx{sn::FX_FADE, 4.00, 4.50, 1.0, 0.0});
     p.name = "a test";
 
     /* A caption, with something in every field that could be dropped. */
@@ -801,8 +870,22 @@ static void test_project()
     CHECK(NEAR(q.tracks[ai].gain, 0.75, 1e-4), "and the track's own level");
     CHECK(NEAR(q.tracks[vi].gain, 1.0, 1e-9),
           "a track nobody touched comes back at unity, got %f", q.tracks[vi].gain);
-    CHECK(NEAR(q.tracks[vi].clips[0].fadeOut, 0.4, 1e-4), "and the fade");
     CHECK(!q.dirty, "a project just loaded is not dirty");
+
+    /* The effects lane, both ramps and which way round they go. */
+    CHECK(q.tracks[vi].fx.size() == 2, "both ramps came back, got %d",
+          (int)q.tracks[vi].fx.size());
+    if (q.tracks[vi].fx.size() == 2) {
+        CHECK(NEAR(q.tracks[vi].fx[0].from, 0.25, 1e-6) &&
+                  NEAR(q.tracks[vi].fx[0].to, 1.75, 1e-6),
+              "the first one where it was");
+        CHECK(q.tracks[vi].fx[0].a == 0.0 && q.tracks[vi].fx[0].b == 1.0,
+              "rising");
+        CHECK(q.tracks[vi].fx[1].a == 1.0 && q.tracks[vi].fx[1].b == 0.0,
+              "and the second one falling");
+        CHECK(NEAR(q.tracks[vi].fxAt(1.0), 0.5, 1e-6), "and it reads back the same");
+    }
+    CHECK(q.tracks[ai].fx.empty(), "a lane with nothing on it stays empty");
 
     /* The caption, field by field. The string is the one that matters most:
      * it is the only thing in this format that is escaped, and a newline or a
@@ -850,7 +933,7 @@ static void test_export()
         /* Two sources, a cut and a fade: everything that forces a render. */
         sn::placeItem(p, a, 0.0);
         sn::placeItem(p, b, 3.0);
-        p.tracks[0].clips[0].fadeOut = 0.5;
+        p.tracks[0].fx.push_back(sn::Fx{sn::FX_FADE, 1.0, 1.5, 1.0, 0.0});
 
         sn::ExportSettings s;
         s.path = "media/out_render.mp4";
@@ -1260,6 +1343,7 @@ int main()
     test_timeline();
     test_text();
     test_loop();
+    test_fx();
 
     if (have(V1) && have(V2) && have(A1)) {
         test_media();

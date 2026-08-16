@@ -29,8 +29,8 @@ enum {
     LANE_H = 56,
     LANE_GAP = 2,
     EDGE_GRAB = 7,       /* how close to an edge counts as the edge */
-    FADE_GRAB = 14,      /* ...and how close to a fade handle counts as it  */
-    FADE_STRIP = 15      /* the band along the top the fades own outright   */
+    FX_THIN = 11,        /* an empty effects lane, under its track   */
+    FX_TALL = 30         /* ...and one with something on it          */
 };
 
 /* ------------------------------------------------------------------ *
@@ -47,18 +47,54 @@ float App::xAt(double t) const
     return (float)(rTimeline.x + HEAD_W + (t - scroll) * zoom);
 }
 
+/* --- how tall a track is ---
+ *
+ * Every track carries an effects lane under its clips: a thin strip when
+ * there is nothing on it and a taller one when there is. So a track's block
+ * is its clip lane plus that strip, and where the next block starts depends
+ * on every block above it rather than on the index times a constant.
+ *
+ * It is walked rather than cached. There are a handful of tracks in a
+ * project, this is a few additions per lookup, and a cached total is a thing
+ * that goes stale the first time somebody adds an effect. */
+static float fx_h(const Track &t)
+{
+    return t.fx.empty() ? (float)FX_THIN : (float)FX_TALL;
+}
+
+static float block_h(const Track &t) { return LANE_H + fx_h(t); }
+
+static float block_top(const App &a, int idx)
+{
+    float y = a.rTimeline.y + RULER_H + 1 - a.trackScroll;
+    const int n = (int)a.proj.tracks.size();
+    for (int i = 0; i < idx && i < n; i++) y += block_h(a.proj.tracks[i]) + LANE_GAP;
+    return y;
+}
+
+/* Where this track's clips are drawn. */
 static Rectangle lane_rect(const App &a, int idx)
 {
-    const float top = a.rTimeline.y + RULER_H + 1 - a.trackScroll;
-    return Rectangle{a.rTimeline.x + HEAD_W,
-                     top + (float)idx * (LANE_H + LANE_GAP),
-                     a.rTimeline.width - HEAD_W - SCROLL_W, LANE_H};
+    return Rectangle{a.rTimeline.x + HEAD_W, block_top(a, idx),
+                     a.rTimeline.width - HEAD_W - SCROLL_W, (float)LANE_H};
+}
+
+/* ...and the strip under it, where its effects are. */
+static Rectangle fx_rect(const App &a, int idx)
+{
+    Rectangle l = lane_rect(a, idx);
+    const float h = idx >= 0 && idx < (int)a.proj.tracks.size()
+                        ? fx_h(a.proj.tracks[idx])
+                        : (float)FX_THIN;
+    return Rectangle{l.x, l.y + LANE_H, l.width, h};
 }
 
 /* How tall the track list wants to be, and how much room it has. */
 static float tracks_height(const App &a)
 {
-    return (float)a.proj.tracks.size() * (LANE_H + LANE_GAP);
+    float h = 0;
+    for (const Track &t : a.proj.tracks) h += block_h(t) + LANE_GAP;
+    return h;
 }
 
 static float tracks_room(const App &a)
@@ -66,10 +102,27 @@ static float tracks_room(const App &a)
     return a.rTimeline.height - RULER_H - 1 - SCROLL_W;
 }
 
+/* The head covers the whole block, clips and effects lane together: they are
+ * one track and one row of controls belongs to both. */
 static Rectangle head_rect(const App &a, int idx)
 {
     Rectangle l = lane_rect(a, idx);
-    return Rectangle{a.rTimeline.x, l.y, HEAD_W, l.height};
+    const float h = idx >= 0 && idx < (int)a.proj.tracks.size()
+                        ? block_h(a.proj.tracks[idx])
+                        : (float)LANE_H;
+    return Rectangle{a.rTimeline.x, l.y, HEAD_W, h};
+}
+
+/* Which track block a y falls in, or -1. The effects strip counts as part of
+ * its track, because it is. */
+static int track_at(const App &a, float y)
+{
+    for (size_t i = 0; i < a.proj.tracks.size(); i++) {
+        const float top = block_top(a, (int)i);
+        const float bot = top + block_h(a.proj.tracks[i]);
+        if (y >= top - LANE_GAP * 0.5f && y < bot + LANE_GAP * 0.5f) return (int)i;
+    }
+    return -1;
 }
 
 static Rectangle clip_rect(const App &a, int idx, const Clip &c)
@@ -79,28 +132,17 @@ static Rectangle clip_rect(const App &a, int idx, const Clip &c)
     return Rectangle{x0, l.y + 2, std::max(2.0f, x1 - x0), l.height - 4};
 }
 
-/* The same clip for the purpose of being clicked on, which is the whole lane
- * height rather than the drawn rectangle.
+/* The same clip for the purpose of being clicked on, which is the whole clip
+ * lane height rather than the drawn rectangle.
  *
  * A clip is drawn two pixels inside its lane, so a click in that two pixel
  * band was a click on no clip at all - and a click on no clip moves the
- * playhead. The band runs directly above the clip, which is exactly where the
- * fade grips are, so aiming at a fade and missing high scrubbed instead. */
+ * playhead. */
 static Rectangle clip_hit_rect(const App &a, int idx, const Clip &c)
 {
     Rectangle r = clip_rect(a, idx, c);
     Rectangle l = lane_rect(a, idx);
     return Rectangle{r.x, l.y, r.width, l.height};
-}
-
-/* Which track lane a y falls in, or -1. */
-static int track_at(const App &a, float y)
-{
-    for (size_t i = 0; i < a.proj.tracks.size(); i++) {
-        Rectangle l = lane_rect(a, (int)i);
-        if (y >= l.y - LANE_GAP * 0.5f && y < l.y + l.height + LANE_GAP * 0.5f) return (int)i;
-    }
-    return -1;
 }
 
 static double snap_time(App &a, double t, const ClipRef *ignore)
@@ -242,54 +284,6 @@ static void draw_clip(App &a, int idx, const Clip &c, TrackKind kind, bool hot)
         }
     }
 
-    /* Fades, drawn as the ramp they are. */
-    if (c.fadeIn > 0) {
-        const float w = (float)(c.fadeIn * a.zoom);
-        DrawTriangle(Vector2{r.x, r.y}, Vector2{r.x, r.y + r.height},
-                     Vector2{r.x + w, r.y}, Color{0, 0, 0, 120});
-    }
-    if (c.fadeOut > 0) {
-        const float w = (float)(c.fadeOut * a.zoom);
-        DrawTriangle(Vector2{r.x + r.width, r.y}, Vector2{r.x + r.width - w, r.y},
-                     Vector2{r.x + r.width, r.y + r.height}, Color{0, 0, 0, 120});
-    }
-
-    /* The fade handles: small squares in the top corners. Only when the clip
-     * is wide enough that they are not the whole clip. */
-    /* --- fades ---
-     *
-     * The ramp is drawn whenever there is one, whether or not the pointer is
-     * anywhere near: a fade is a property of the edit and somebody scrolling
-     * past should be able to see that this clip has one. It is a wedge taken
-     * out of the corner, which is the shape of what it does - the picture is
-     * at nothing at the point of the wedge and at full at its base.
-     *
-     * The grips are drawn on a clip that is selected or under the pointer,
-     * and they are square handles rather than the six-pixel dots they were.
-     * See the hit test for why a fade of zero used to be nearly impossible to
-     * pick up at all. */
-    const float fin = (float)(c.fadeIn * a.zoom);
-    const float fout = (float)(c.fadeOut * a.zoom);
-    const Color ramp = {0, 0, 0, 110};
-
-    if (fin > 1.0f)
-        sn_triangle(Vector2{r.x, r.y}, Vector2{r.x + fin, r.y},
-                    Vector2{r.x, r.y + r.height}, ramp);
-    if (fout > 1.0f)
-        sn_triangle(Vector2{r.x + r.width, r.y}, Vector2{r.x + r.width - fout, r.y},
-                    Vector2{r.x + r.width, r.y + r.height}, ramp);
-
-    if (r.width > 30 && (hot || isSel)) {
-        const float k = 4.0f;
-        auto grip = [&](float gx) {
-            Rectangle g = {gx - k, r.y + 1, k * 2, k * 2};
-            DrawRectangleRec(g, SN_TEXT);
-            DrawRectangleLinesEx(g, 1, SN_BG);
-        };
-        grip(r.x + fin);
-        grip(r.x + r.width - fout);
-    }
-
     /* The name, and how long it is. Both go in a strip along the bottom
      * rather than over the picture at the head of the clip - text on top of a
      * thumbnail is readable in neither direction. */
@@ -337,6 +331,106 @@ static void draw_clip(App &a, int idx, const Clip &c, TrackKind kind, bool hot)
     }
 
     EndScissorMode();
+}
+
+/* Which track's effects strip the pointer is in, or -1. */
+static int fx_lane_at(const App &a, Vector2 m, Rectangle r)
+{
+    if (m.x < r.x + HEAD_W) return -1;
+    for (size_t i = 0; i < a.proj.tracks.size(); i++)
+        if (CheckCollisionPointRec(m, fx_rect(a, (int)i))) return (int)i;
+    return -1;
+}
+
+/* The ramp under the pointer on that lane, and which end of it - 0 for the
+ * left, 1 for the right, -1 for the middle.
+ *
+ * The ends are found by x alone rather than by how close the pointer is to
+ * the grip drawn there. The two ends of a ramp are at different heights, so
+ * asking for both coordinates would make the shallow end of a gentle fade
+ * harder to grab than the steep end of a sharp one, which is a rule nobody
+ * could learn. */
+static int fx_under(const App &a, int idx, Vector2 m, int *end)
+{
+    *end = -1;
+    if (idx < 0 || idx >= (int)a.proj.tracks.size()) return -1;
+
+    const Track &t = a.proj.tracks[idx];
+    for (size_t k = 0; k < t.fx.size(); k++) {
+        const float x0 = a.xAt(t.fx[k].from), x1 = a.xAt(t.fx[k].to);
+        if (std::fabs(m.x - x0) <= 7.0f) { *end = 0; return (int)k; }
+        if (std::fabs(m.x - x1) <= 7.0f) { *end = 1; return (int)k; }
+        if (m.x > x0 && m.x < x1) return (int)k;
+    }
+    return -1;
+}
+
+/* Sorted, non-overlapping, and nothing of no length - the same discipline the
+ * clips keep. Run after anything that moves a ramp. */
+static void tidy_fx(Track &t)
+{
+    std::sort(t.fx.begin(), t.fx.end(),
+              [](const Fx &x, const Fx &y) { return x.from < y.from; });
+
+    for (size_t i = 0; i < t.fx.size();) {
+        if (i > 0 && t.fx[i].from < t.fx[i - 1].to) t.fx[i].from = t.fx[i - 1].to;
+        if (t.fx[i].to - t.fx[i].from < 0.02) t.fx.erase(t.fx.begin() + (long)i);
+        else i++;
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ * The effects lane
+ *
+ * A ramp is drawn as the line it is - where it starts, where it ends, and
+ * what level it is at each end - over a filled area beneath, so the shape can
+ * be read from across the timeline without hovering anything.
+ *
+ * The lane is thin and empty until something is on it. That is the whole of
+ * "collapsed until used": there is no third state to draw and nothing to
+ * expand, the strip is simply nineteen pixels taller once it has a ramp.
+ * ------------------------------------------------------------------ */
+
+static void draw_fx(App &a, int idx)
+{
+    if (idx < 0 || idx >= (int)a.proj.tracks.size()) return;
+    const Track &t = a.proj.tracks[idx];
+    Rectangle fr = fx_rect(a, idx);
+
+    if (t.fx.empty()) return;
+
+    const float top = fr.y + 3, bot = fr.y + fr.height - 3;
+    const float span = std::max(1.0f, bot - top);
+
+    for (size_t k = 0; k < t.fx.size(); k++) {
+        const Fx &f = t.fx[k];
+        const float x0 = a.xAt(f.from), x1 = a.xAt(f.to);
+        if (x1 < fr.x || x0 > fr.x + fr.width) continue;
+
+        const float ya = bot - (float)f.a * span;
+        const float yb = bot - (float)f.b * span;
+
+        const bool sel = a.fxSel.track == idx && a.fxSel.index == (int)k;
+
+        /* Under the line: the level, so a ramp reads as an amount and not
+         * only as a slope. */
+        sn_triangle(Vector2{x0, bot}, Vector2{x1, bot}, Vector2{x1, yb},
+                    Color{0x78, 0xb9, 0x46, 60});
+        sn_triangle(Vector2{x0, bot}, Vector2{x1, yb}, Vector2{x0, ya},
+                    Color{0x78, 0xb9, 0x46, 60});
+
+        DrawLineEx(Vector2{x0, ya}, Vector2{x1, yb}, sel ? 2.0f : 1.0f,
+                   sel ? SN_TEXT : SN_ACCENT);
+
+        /* A grip at each end, which is what the ends are dragged by. */
+        const float g = sel ? 4.0f : 3.0f;
+        for (int e = 0; e < 2; e++) {
+            const float gx = e ? x1 : x0, gy = e ? yb : ya;
+            DrawRectangleRec(Rectangle{gx - g, gy - g, g * 2, g * 2}, SN_BG);
+            DrawRectangleLinesEx(Rectangle{gx - g, gy - g, g * 2, g * 2}, 1,
+                                 sel ? SN_TEXT : SN_ACCENT);
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -454,6 +548,24 @@ static void draw_heads(App &a)
         DrawLine((int)(h.x + h.width) - 1, (int)h.y, (int)(h.x + h.width) - 1,
                  (int)(h.y + h.height), SN_BORDER);
 
+        /* The effects strip's own corner of the head, darker to match the
+         * lane beside it, and labelled - a strip eleven pixels tall with
+         * nothing in it needs to say what it is for. */
+        {
+            Rectangle fh = {h.x, h.y + LANE_H, h.width, h.height - LANE_H};
+            DrawRectangleRec(fh, Color{0x0d, 0x12, 0x0b, 255});
+            DrawLine((int)fh.x, (int)fh.y, (int)(fh.x + fh.width), (int)fh.y,
+                     SN_BORDER);
+            sn_text(&ui, SN_F_TINY, "FX", fh.x + 8, fh.y + (fh.height - 9) * 0.5f,
+                    t.fx.empty() ? SN_EDGE : SN_ACCENT);
+            if (!t.fx.empty()) {
+                char n[24];
+                snprintf(n, sizeof n, "%d", (int)t.fx.size());
+                sn_text(&ui, SN_F_TINY, n, fh.x + 30, fh.y + (fh.height - 9) * 0.5f,
+                        SN_DIM);
+            }
+        }
+
         sn_text_spaced(&ui, SN_F_SMALL, t.name.c_str(), h.x + 8, h.y + 5,
                        t.muted ? SN_EDGE : SN_TEXT);
 
@@ -532,8 +644,11 @@ static void draw_heads(App &a)
             }
         }
 
-        /* --- the switches, along the bottom --- */
-        const float by = h.y + h.height - 23;
+        /* --- the switches, along the bottom of the clip half ---
+         *
+         * h.height now covers the effects strip as well, so this is measured
+         * from the clip lane rather than from the bottom of the head. */
+        const float by = h.y + LANE_H - 23;
         Rectangle b1 = {h.x + 6, by, 20, 18};
         Rectangle b2 = {h.x + 29, by, 20, 18};
         Rectangle b3 = {h.x + 52, by, 20, 18};
@@ -661,6 +776,13 @@ void timelinePane(App &a, Rectangle r)
             for (float x = l.x; x < l.x + l.width; x += 10)
                 DrawLineEx(Vector2{x, l.y}, Vector2{x + l.height, l.y + l.height}, 1,
                            Color{0x2a, 0x3a, 0x1e, 60});
+
+        /* The effects lane, darker than the clips above it so the eye reads
+         * two rows rather than one tall one. */
+        Rectangle fr = fx_rect(a, (int)i);
+        DrawRectangleRec(fr, Color{0x08, 0x0c, 0x07, 255});
+        DrawLine((int)fr.x, (int)fr.y, (int)(fr.x + fr.width), (int)fr.y,
+                 Color{0x1a, 0x24, 0x14, 255});
     }
 
     EndScissorMode();
@@ -697,29 +819,7 @@ void timelinePane(App &a, Rectangle r)
 
             const bool wide = cr.width > 24;
 
-            /* The band along the top belongs to the fades, corners and all,
-             * and it is tested before the trim handles rather than after.
-             *
-             * The other way round, a fade of zero was almost impossible to
-             * start: its handle sits exactly on the clip's edge, which is
-             * where the trim handle is, and trim went first - so the only way
-             * in was a five pixel gap between the end of the trim zone and
-             * the end of the fade's reach. That is the whole of "the fade
-             * controls are hard to use".
-             *
-             * They still share the corner rather than one taking it: the top
-             * fifteen pixels of the edge make a fade and the rest of it
-             * trims, which is how every editor that has both does it. */
-            const bool strip = m.y < cr.y + FADE_STRIP;
-
-            if (wide && strip &&
-                std::fabs(m.x - (cr.x + (float)(c.fadeIn * a.zoom))) < FADE_GRAB)
-                overWhat = DRAG_FADE_IN;
-            else if (wide && strip &&
-                     std::fabs(m.x - (cr.x + cr.width - (float)(c.fadeOut * a.zoom))) <
-                         FADE_GRAB)
-                overWhat = DRAG_FADE_OUT;
-            else if (wide && m.x < cr.x + EDGE_GRAB) overWhat = DRAG_TRIM_IN;
+            if (wide && m.x < cr.x + EDGE_GRAB) overWhat = DRAG_TRIM_IN;
             else if (wide && m.x > cr.x + cr.width - EDGE_GRAB) overWhat = DRAG_TRIM_OUT;
             else if (t.kind == TRACK_AUDIO &&
                      std::fabs(m.y - (cr.y + cr.height * (1.0f - (float)(c.gain * 0.5)))) < 5)
@@ -750,8 +850,10 @@ void timelinePane(App &a, Rectangle r)
             break;
         }
         case DRAG_TRIM_IN:
-        case DRAG_FADE_IN:
-        case DRAG_FADE_OUT: sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW); break;
+        case DRAG_FX_IN:
+        case DRAG_FX_OUT:
+        case DRAG_FX_NEW: sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW); break;
+        case DRAG_FX: sn_cursor(&ui, MOUSE_CURSOR_RESIZE_ALL); break;
         case DRAG_GAIN:     sn_cursor(&ui, MOUSE_CURSOR_RESIZE_NS); break;
         case DRAG_CLIP:     sn_cursor(&ui, MOUSE_CURSOR_RESIZE_ALL); break;
         default:
@@ -771,8 +873,9 @@ void timelinePane(App &a, Rectangle r)
         break;
     }
     case DRAG_TRIM_IN:
-    case DRAG_FADE_IN:
-    case DRAG_FADE_OUT:
+    case DRAG_FX_IN:
+    case DRAG_FX_OUT:
+    case DRAG_FX_NEW:
     case DRAG_SCRUB:    sn_cursor(&ui, MOUSE_CURSOR_RESIZE_EW); break;
     case DRAG_GAIN:     sn_cursor(&ui, MOUSE_CURSOR_RESIZE_NS); break;
     case DRAG_CLIP:
@@ -789,6 +892,7 @@ void timelinePane(App &a, Rectangle r)
         for (const Clip &c : t.clips)
             draw_clip(a, (int)i, c, t.kind,
                       overClip.track == (int)i && overClip.clip == c.id);
+        draw_fx(a, (int)i);
     }
     EndScissorMode();
 
@@ -796,10 +900,44 @@ void timelinePane(App &a, Rectangle r)
     draw_heads(a);
 
     /* --- starting a drag --- */
+    const int fxLane = fx_lane_at(a, m, r);
+
     if (inside && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && a.drag == DRAG_NONE) {
         if (m.y < r.y + RULER_H && m.x > r.x + HEAD_W) {
             a.drag = DRAG_SCRUB;
             a.follow = false;
+        } else if (fxLane >= 0 && !a.proj.tracks[fxLane].locked) {
+            /* The effects lane. Tested before the clips and before the
+             * "clicked on nothing, move the playhead" case below, because it
+             * is inside a track's block and would otherwise be neither. */
+            int end = -1;
+            const int k = fx_under(a, fxLane, m, &end);
+            Track &t = a.proj.tracks[fxLane];
+
+            if (k >= 0) {
+                a.fxSel = App::FxRef{fxLane, k};
+                a.fxDrag = a.fxSel;
+                a.fxGrabFrom = t.fx[(size_t)k].from;
+                a.fxGrabTo = t.fx[(size_t)k].to;
+                a.drag = end == 0 ? DRAG_FX_IN : end == 1 ? DRAG_FX_OUT : DRAG_FX;
+            } else {
+                /* Drawing a new one. It exists from the first frame of the
+                 * drag rather than appearing on release, so the shape being
+                 * made is the shape on screen; a ramp shorter than a moment
+                 * is thrown away by tidy_fx when the button comes up. */
+                Fx f;
+                f.from = f.to = std::max(0.0, a.timeAt(m.x));
+                f.a = 0.0;
+                f.b = 1.0;
+                t.fx.push_back(f);
+
+                a.fxNewAt = f.from;
+                a.fxSel = App::FxRef{fxLane, (int)t.fx.size() - 1};
+                a.fxDrag = a.fxSel;
+                a.drag = DRAG_FX_NEW;
+            }
+            a.dragFrom = m;
+            a.dragMoved = false;
         } else if (overClip.ok() && !a.proj.tracks[overClip.track].locked) {
             const Clip *c = a.proj.clip(overClip);
             a.select(overClip, IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT));
@@ -855,6 +993,39 @@ void timelinePane(App &a, Rectangle r)
             a.changed(true);
             break;
         }
+        case DRAG_FX:
+        case DRAG_FX_IN:
+        case DRAG_FX_OUT:
+        case DRAG_FX_NEW: {
+            Track *t = a.proj.track(a.fxDrag.track);
+            if (!t || a.fxDrag.index < 0 || a.fxDrag.index >= (int)t->fx.size()) break;
+            Fx &f = t->fx[(size_t)a.fxDrag.index];
+
+            const double now = std::max(0.0, snap_time(a, a.timeAt(m.x), nullptr));
+
+            if (a.drag == DRAG_FX_NEW) {
+                /* Which way the ramp goes is which way it was drawn. A rise
+                 * is a fade in and a fall is a fade out, so the gesture and
+                 * the result are the same shape and there is no direction to
+                 * choose from a menu afterwards. */
+                f.from = std::min(a.fxNewAt, now);
+                f.to = std::max(a.fxNewAt, now);
+                const bool rising = now >= a.fxNewAt;
+                f.a = rising ? 0.0 : 1.0;
+                f.b = rising ? 1.0 : 0.0;
+            } else if (a.drag == DRAG_FX_IN) {
+                f.from = std::min(now, a.fxGrabTo - 0.02);
+            } else if (a.drag == DRAG_FX_OUT) {
+                f.to = std::max(now, a.fxGrabFrom + 0.02);
+            } else {
+                const double d = a.timeAt(m.x) - a.timeAt(a.dragFrom.x);
+                const double len = a.fxGrabTo - a.fxGrabFrom;
+                f.from = std::max(0.0, a.fxGrabFrom + d);
+                f.to = f.from + len;
+            }
+            a.changed(true);
+            break;
+        }
         case DRAG_GAIN: {
             Clip *c = a.proj.clip(a.dragClip);
             if (!c) break;
@@ -865,17 +1036,6 @@ void timelinePane(App &a, Rectangle r)
              * 1.000 by hand. */
             if (std::fabs(g - 1.0) < 0.04) g = 1.0;
             c->gain = std::max(0.0, std::min(2.0, g));
-            a.changed(true);
-            break;
-        }
-        case DRAG_FADE_IN:
-        case DRAG_FADE_OUT: {
-            Clip *c = a.proj.clip(a.dragClip);
-            if (!c) break;
-            double f = a.drag == DRAG_FADE_IN ? a.timeAt(m.x) - c->pos
-                                              : c->end() - a.timeAt(m.x);
-            f = std::max(0.0, std::min(f, c->dur()));
-            (a.drag == DRAG_FADE_IN ? c->fadeIn : c->fadeOut) = f;
             a.changed(true);
             break;
         }
@@ -927,8 +1087,45 @@ void timelinePane(App &a, Rectangle r)
     /* --- finishing --- */
     if (a.drag != DRAG_NONE && a.drag != DRAG_FROM_BIN &&
         IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
-        if (a.dragMoved && a.drag != DRAG_SCRUB) a.changed();
+        const bool wasFx = a.drag == DRAG_FX || a.drag == DRAG_FX_IN ||
+                           a.drag == DRAG_FX_OUT || a.drag == DRAG_FX_NEW;
+
+        if (wasFx) {
+            Track *t = a.proj.track(a.fxDrag.track);
+            if (t) {
+                /* Remember which ramp this was by its ends, because tidying
+                 * sorts the vector and the index it had is not the index it
+                 * keeps. */
+                double from = -1, to = -1;
+                if (a.fxDrag.index >= 0 && a.fxDrag.index < (int)t->fx.size()) {
+                    from = t->fx[(size_t)a.fxDrag.index].from;
+                    to = t->fx[(size_t)a.fxDrag.index].to;
+                }
+                tidy_fx(*t);
+
+                a.fxSel = App::FxRef{};
+                for (size_t k = 0; k < t->fx.size(); k++)
+                    if (std::fabs(t->fx[k].from - from) < 1e-9 &&
+                        std::fabs(t->fx[k].to - to) < 1e-9)
+                        a.fxSel = App::FxRef{a.fxDrag.track, (int)k};
+            }
+            a.fxDrag = App::FxRef{};
+            a.changed();
+        } else if (a.dragMoved && a.drag != DRAG_SCRUB) {
+            a.changed();
+        }
         a.drag = DRAG_NONE;
+    }
+
+    /* --- right-click a ramp --- */
+    if (inside && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && fxLane >= 0) {
+        int end = -1;
+        const int k = fx_under(a, fxLane, m, &end);
+        if (k >= 0) {
+            a.fxSel = App::FxRef{fxLane, k};
+            static const char *fitems[] = {"turn it the other way", "delete"};
+            sn_menu_open(&ui, m, fitems, 2, 102);
+        }
     }
 
     /* --- double-click a caption: the window with the words in it ---
@@ -971,7 +1168,7 @@ void timelinePane(App &a, Rectangle r)
         items[n++] = "delete and close the gap";
         items[n++] = "-";
         items[n++] = "mute";
-        items[n++] = "clear fades";
+        items[n++] = "clear this track's effects";
 
         if (linked) {
             snprintf(linkItem, sizeof linkItem, "unlink from its %s",
@@ -1087,8 +1284,8 @@ void timelinePane(App &a, Rectangle r)
                                    ? (c->looped()
                                           ? "drag to change how many times it repeats"
                                           : "drag to trim the end, or past it to loop")
-                               : overWhat == DRAG_FADE_IN  ? "drag the fade in"
-                               : overWhat == DRAG_FADE_OUT ? "drag the fade out"
+                               : overWhat == DRAG_FX_IN  ? "drag the start of the ramp"
+                               : overWhat == DRAG_FX_OUT ? "drag the end of the ramp"
                                : overWhat == DRAG_GAIN     ? "drag the level up or down"
                                                            : "drag to move it";
             sn_tip(&ui, "%s  %s of %s  -  %s", b->info.name.c_str(),

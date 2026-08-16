@@ -43,8 +43,6 @@ struct Clip {
     double pos = 0.0;        /* timeline seconds of `in`                 */
 
     double gain = 1.0;       /* audio, linear                            */
-    double fadeIn = 0.0;     /* seconds                                  */
-    double fadeOut = 0.0;
     bool muted = false;
 
     /* How many times [in, out) plays. 1 is a clip; 2.5 is that clip twice
@@ -106,6 +104,54 @@ struct Clip {
     bool covers(double t) const { return t >= pos && t < end(); }
 };
 
+/* --- effects -------------------------------------------------------- *
+ *
+ * An effect is a stretch of the timeline on a track, not a property of a clip.
+ *
+ * Fades used to be two numbers on every Clip, and it was a fade in from the
+ * clip's start and a fade out to its end and nothing else was expressible: not
+ * a fade across a cut, not a dip in the middle, not two of them. It also meant
+ * every clip in the project carried two doubles it almost never used, and the
+ * only way to reach them was a handle in a corner of the clip - the same corner
+ * the trim handle is in.
+ *
+ * As a range on the track, a fade is a thing you can see, put anywhere, and
+ * drag by either end. It is also the shape every effect after it will want,
+ * which is the point of the lane it lives in.
+ * ------------------------------------------------------------------- */
+
+enum FxKind {
+    FX_FADE = 0        /* a ramp between two levels                     */
+};
+
+struct Fx {
+    FxKind kind = FX_FADE;
+    double from = 0.0;       /* timeline seconds                        */
+    double to = 0.0;
+
+    /* The value at each end. A fade in is 0 to 1 and a fade out is 1 to 0,
+     * which is the whole difference between them - there is no direction
+     * flag, because a ramp already knows which way it goes. */
+    double a = 0.0, b = 1.0;
+
+    double dur() const { return to - from; }
+    bool covers(double t) const { return t >= from && t < to; }
+
+    /* Straight line between the ends, and flat outside: before it, whatever
+     * it starts at; after it, whatever it ends at.
+     *
+     * Flat rather than back to 1, so a fade out leaves the picture down until
+     * something raises it again. A ramp that undid itself the moment it
+     * finished would be unusable for the thing fades are mostly for. */
+    double at(double t) const
+    {
+        if (dur() <= 0.0) return b;
+        if (t <= from) return a;
+        if (t >= to) return b;
+        return a + (b - a) * ((t - from) / dur());
+    }
+};
+
 enum TrackKind { TRACK_VIDEO = 0, TRACK_AUDIO = 1, TRACK_TEXT = 2 };
 
 /* Video and text are one band: both put something on the picture, both are
@@ -139,6 +185,20 @@ struct Track {
      * Ignored on video tracks, which have no sound to turn down. */
     double gain = 1.0;
     std::vector<Clip> clips; /* kept sorted by pos, always               */
+
+    /* What this track's output is put through, sorted by `from` and never
+     * overlapping - the same discipline the clips keep, and for the same
+     * reason: two ramps over one moment have no one answer.
+     *
+     * It applies to whatever the track produces. On a video or a text track
+     * that is how opaque the picture is; on an audio track it is the level.
+     * One idea, three meanings, and the lane under the track is where it is
+     * edited. */
+    std::vector<Fx> fx;
+
+    /* The level this track's fx put it at, at time t. 1.0 - unchanged - when
+     * there is nothing on the lane, or before the first ramp on it. */
+    double fxAt(double t) const;
 
     /* --- where this track's picture sits on the canvas (video only) ---
      *

@@ -75,9 +75,15 @@ middle piece and press **Shift+Delete**. Then **Ctrl+E**.
   and outline are both yours, and it will set in any font this machine has:
   868 turned up on the one it was written on, and there is a search box over
   the list. Colours are the hex code or your system's own picker. A caption is a clip on a track of its own, so it trims, slides,
-  splits, fades and layers like everything else, and it reorders among the
+  splits and layers like everything else, and it reorders among the
   video tracks by the same rule they do — move a text track to the top row and
   the caption goes behind the picture.
+* **An effects lane under every track.** A thin strip that grows when you put
+  something on it. Drag across it to draw a fade — left to right fades up,
+  right to left fades down — then drag either end to change it, or the middle
+  to move it. On a video or caption track it fades the picture; on an audio
+  track, the level. Fades are a range on the timeline rather than a corner of
+  a clip, so one can cross a cut, sit in the middle of a clip, or happen twice.
 * **A level per audio track.** A fader in the track head, on top of the level
   already on each clip, so turning a whole track of dialogue down is one
   gesture rather than one per clip.
@@ -147,8 +153,8 @@ exactly what the preview showed you, because both go through the same code.
 The mouse: click a clip to select it, drag the middle to move it, drag either
 edge to trim it, drag the small square in a top corner to make a fade, and
 drag the line across an audio clip to change its level — it snaps back to 0 dB
-on the way past. The top corners of a clip make a fade and the rest of the
-edge trims, so both live on the same edge without fighting over it. The pointer's shape says which of those you are about to do.
+on the way past. Fades live on the effects lane under each track: drag across
+it to draw one, and right-click a ramp to turn it the other way or remove it. The pointer's shape says which of those you are about to do.
 The ruler scrubs. The wheel scrolls; Ctrl or Shift with it zooms; Alt with it,
 or the wheel over the track heads, scrolls the tracks; the middle button pans.
 There are scrollbars for both. Right-click a clip for the rest. Delete with
