@@ -79,11 +79,13 @@ middle piece and press **Shift+Delete**. Then **Ctrl+E**.
   video tracks by the same rule they do — move a text track to the top row and
   the caption goes behind the picture.
 * **An effects lane under every track.** A thin strip that grows when you put
-  something on it. Drag across it to draw a fade — left to right fades up,
-  right to left fades down — then drag either end to change it, or the middle
-  to move it. On a video or caption track it fades the picture; on an audio
-  track, the level. Fades are a range on the timeline rather than a corner of
-  a clip, so one can cross a cut, sit in the middle of a clip, or happen twice.
+  something on it. Click anywhere on it to add a point and drag it; the curve
+  between the points is what the track is put through. On a video or caption
+  track that is how opaque the picture is — captions fade exactly the way
+  pictures do, because it is the same number — and on an audio track it is the
+  level. Right-click for the shapes worth having a name for: fade in, fade
+  out, in and out, a square pulse, a sine wave. A point can be told to *hold*,
+  which is what makes a square square.
 * **Channels, when you want them.** A file's audio arrives as one clip
   however many channels it has — the bin says mono, stereo or how many — and
   right-clicking it offers to split them apart, one mono clip per channel,
@@ -158,8 +160,9 @@ exactly what the preview showed you, because both go through the same code.
 The mouse: click a clip to select it, drag the middle to move it, drag either
 edge to trim it, drag the small square in a top corner to make a fade, and
 drag the line across an audio clip to change its level — it snaps back to 0 dB
-on the way past. Fades live on the effects lane under each track: drag across
-it to draw one, and right-click a ramp to turn it the other way or remove it. The pointer's shape says which of those you are about to do.
+on the way past. Fades live on the effects lane under each track: click to add
+a point, drag it about, and right-click for presets or to delete one. Only the
+ruler moves the playhead. The pointer's shape says which of those you are about to do.
 The ruler scrubs. The wheel scrolls; Ctrl or Shift with it zooms; Alt with it,
 or the wheel over the track heads, scrolls the tracks; the middle button pans.
 There are scrollbars for both. Right-click a clip for the rest. Delete with

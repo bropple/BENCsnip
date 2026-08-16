@@ -262,20 +262,69 @@ static void test_fx()
     sn::Track t;
     CHECK(NEAR(t.fxAt(0.0), 1.0, 1e-9), "an empty lane changes nothing");
 
-    /* Up from nothing over two seconds, then down again later. */
-    t.fx.push_back(sn::Fx{sn::FX_FADE, 1.0, 3.0, 0.0, 1.0});
-    t.fx.push_back(sn::Fx{sn::FX_FADE, 8.0, 9.0, 1.0, 0.0});
+    /* Up from nothing over two seconds, held, then down again later. */
+    t.fx.push_back(sn::FxPoint{1.0, 0.0, false});
+    t.fx.push_back(sn::FxPoint{3.0, 1.0, false});
+    t.fx.push_back(sn::FxPoint{8.0, 1.0, false});
+    t.fx.push_back(sn::FxPoint{9.0, 0.0, false});
 
-    CHECK(NEAR(t.fxAt(0.5), 1.0, 1e-9), "before the first ramp, nothing has happened");
+    CHECK(NEAR(t.fxAt(0.5), 0.0, 1e-9), "before the first point it is that point");
     CHECK(NEAR(t.fxAt(1.0), 0.0, 1e-9), "it starts where it says");
     CHECK(NEAR(t.fxAt(2.0), 0.5, 1e-9), "and is halfway at halfway");
     CHECK(NEAR(t.fxAt(3.0), 1.0, 1e-9), "and finishes where it says");
+    CHECK(NEAR(t.fxAt(5.0), 1.0, 1e-9), "between two equal points it holds");
+    CHECK(NEAR(t.fxAt(8.5), 0.5, 1e-9), "the last pair runs the other way");
+    CHECK(NEAR(t.fxAt(20.0), 0.0, 1e-9), "and after the last point it stays there");
 
-    /* Between two ramps it holds. A ramp that undid itself the moment it
-     * finished would be useless for the thing fades are mostly for. */
-    CHECK(NEAR(t.fxAt(5.0), 1.0, 1e-9), "between ramps it holds");
-    CHECK(NEAR(t.fxAt(8.5), 0.5, 1e-9), "the second one runs the other way");
-    CHECK(NEAR(t.fxAt(20.0), 0.0, 1e-9), "and after it, it stays down");
+    /* A held point steps rather than slides, which is what a square is. */
+    sn::Track h;
+    h.fx.push_back(sn::FxPoint{0.0, 1.0, true});
+    h.fx.push_back(sn::FxPoint{1.0, 0.0, true});
+    h.fx.push_back(sn::FxPoint{2.0, 1.0, false});
+    CHECK(NEAR(h.fxAt(0.99), 1.0, 1e-9), "a held point holds to the very end");
+    CHECK(NEAR(h.fxAt(1.01), 0.0, 1e-9), "and then steps");
+
+    /* --- the presets --- */
+    sn::Track p1;
+    sn::fxPreset(p1, sn::FX_FADE_IN, 2.0, 4.0);
+    CHECK(p1.fx.size() == 2, "a fade in is two points, got %d", (int)p1.fx.size());
+    CHECK(NEAR(p1.fxAt(2.0), 0.0, 1e-9) && NEAR(p1.fxAt(4.0), 1.0, 1e-9),
+          "and runs the right way");
+
+    sn::Track p2;
+    sn::fxPreset(p2, sn::FX_IN_OUT, 0.0, 4.0);
+    CHECK(NEAR(p2.fxAt(0.0), 0.0, 1e-9), "in and out starts at nothing");
+    CHECK(NEAR(p2.fxAt(2.0), 1.0, 1e-9), "is full in the middle");
+    CHECK(NEAR(p2.fxAt(4.0), 0.0, 1e-9), "and ends at nothing");
+
+    sn::Track p3;
+    sn::fxPreset(p3, sn::FX_PULSE, 0.0, 4.0, 2);
+    CHECK(NEAR(p3.fxAt(0.5), 1.0, 1e-9), "a pulse is on...");
+    CHECK(NEAR(p3.fxAt(1.5), 0.0, 1e-9), "...then off...");
+    CHECK(NEAR(p3.fxAt(2.5), 1.0, 1e-9), "...then on again");
+    for (const sn::FxPoint &q : p3.fx)
+        CHECK(q.v == 0.0 || q.v == 1.0, "and never anything in between, got %f", q.v);
+
+    sn::Track p4;
+    sn::fxPreset(p4, sn::FX_WAVE, 0.0, 4.0, 1);
+    CHECK(NEAR(p4.fxAt(0.0), 0.0, 1e-6), "a wave starts at nothing");
+    CHECK(NEAR(p4.fxAt(2.0), 1.0, 1e-6), "peaks in the middle");
+    CHECK(NEAR(p4.fxAt(4.0), 0.0, 1e-6), "and comes back down");
+    CHECK(p4.fx.size() > 8, "with enough points to look like a curve, got %d",
+          (int)p4.fx.size());
+
+    /* A preset replaces what was inside its range and leaves the rest. */
+    sn::Track p5;
+    p5.fx.push_back(sn::FxPoint{0.5, 0.25, false});     /* outside      */
+    p5.fx.push_back(sn::FxPoint{2.5, 0.75, false});     /* inside       */
+    sn::fxPreset(p5, sn::FX_FADE_IN, 2.0, 4.0);
+    bool kept = false, gone = true;
+    for (const sn::FxPoint &q : p5.fx) {
+        if (NEAR(q.t, 0.5, 1e-9)) kept = true;
+        if (NEAR(q.t, 2.5, 1e-9)) gone = false;
+    }
+    CHECK(kept, "a point outside the range survives");
+    CHECK(gone, "and one inside it does not");
 }
 
 static void test_media()
@@ -651,7 +700,7 @@ static void test_render()
         const double plain = bright(1.0);
         CHECK(plain > 5.0, "there is a picture to fade, %f", plain);
 
-        p.tracks[0].fx.push_back(sn::Fx{sn::FX_FADE, 0.0, 2.0, 0.0, 1.0});
+        sn::fxPreset(p.tracks[0], sn::FX_FADE_IN, 0.0, 2.0);
         const double early = bright(0.05);
         const double mid = bright(1.0);
         const double late = bright(1.95);
@@ -731,6 +780,33 @@ static void test_render()
         const std::vector<uint8_t> on6 = frame(6.0, true);
         CHECK(differing(off6, on6) == 0, "and nothing is drawn after it ends");
 
+        /* A caption fades from the effects lane exactly the way a picture
+         * does, because on a text track it is the same number. This is the
+         * check behind the claim that effects apply to everything visual. */
+        {
+            sn::fxPreset(p.tracks[ti], sn::FX_FADE_IN, 0.0, 2.0);
+
+            /* How much it changed the frame, not how many pixels it touched.
+             * A caption at one per cent opacity still moves every pixel it
+             * covers by a little, so counting them says it is fully there. */
+            auto strength = [&](double at) {
+                const std::vector<uint8_t> off = frame(at, false);
+                const std::vector<uint8_t> on = frame(at, true);
+                long sum = 0;
+                for (size_t i = 0; i + 3 < off.size() && i + 3 < on.size(); i += 4)
+                    for (int k = 0; k < 3; k++)
+                        sum += std::abs((int)off[i + k] - (int)on[i + k]);
+                return sum;
+            };
+            const long early = strength(0.02);
+            const long full = strength(1.99);
+            CHECK(full > 0, "the caption is there at the top of the fade, %ld", full);
+            CHECK(early < full / 10, "and barely there at the bottom of it, %ld vs %ld",
+                  early, full);
+
+            p.tracks[ti].fx.clear();
+        }
+
         /* The last text track comes out again, unlike the last video or audio
          * one: a project with no captions in it is an ordinary project. */
         CHECK(sn::removeTrack(p, ti), "and the last text track can be removed");
@@ -753,12 +829,7 @@ static void test_render()
     /* A ramp on the track's effects lane halves the level at its midpoint,
      * and the mixer evaluates it per sample. */
     {
-        sn::Fx f;
-        f.from = 0.0;
-        f.to = 2.0;
-        f.a = 0.0;
-        f.b = 1.0;
-        p.tracks[1].fx.push_back(f);
+        sn::fxPreset(p.tracks[1], sn::FX_FADE_IN, 0.0, 2.0);
         r.audioAt(1.0, 1024, mix.data());
         double faded = 0;
         for (float v : mix) faded += v * v;
@@ -945,8 +1016,10 @@ static void test_project()
 
     p.tracks[ai].clips[0].gain = 0.5;
     p.tracks[ai].gain = 0.75;
-    p.tracks[vi].fx.push_back(sn::Fx{sn::FX_FADE, 0.25, 1.75, 0.0, 1.0});
-    p.tracks[vi].fx.push_back(sn::Fx{sn::FX_FADE, 4.00, 4.50, 1.0, 0.0});
+    sn::fxPreset(p.tracks[vi], sn::FX_FADE_IN, 0.25, 1.75);
+    p.tracks[vi].fx.push_back(sn::FxPoint{4.00, 1.0, true});
+    p.tracks[vi].fx.push_back(sn::FxPoint{4.50, 0.0, false});
+    sn::fxTidy(p.tracks[vi]);
     p.name = "a test";
 
     /* A caption, with something in every field that could be dropped. */
@@ -984,16 +1057,12 @@ static void test_project()
     CHECK(!q.dirty, "a project just loaded is not dirty");
 
     /* The effects lane, both ramps and which way round they go. */
-    CHECK(q.tracks[vi].fx.size() == 2, "both ramps came back, got %d",
+    CHECK(q.tracks[vi].fx.size() == 4, "all four points came back, got %d",
           (int)q.tracks[vi].fx.size());
-    if (q.tracks[vi].fx.size() == 2) {
-        CHECK(NEAR(q.tracks[vi].fx[0].from, 0.25, 1e-6) &&
-                  NEAR(q.tracks[vi].fx[0].to, 1.75, 1e-6),
+    if (q.tracks[vi].fx.size() == 4) {
+        CHECK(NEAR(q.tracks[vi].fx[0].t, 0.25, 1e-6) && q.tracks[vi].fx[0].v == 0.0,
               "the first one where it was");
-        CHECK(q.tracks[vi].fx[0].a == 0.0 && q.tracks[vi].fx[0].b == 1.0,
-              "rising");
-        CHECK(q.tracks[vi].fx[1].a == 1.0 && q.tracks[vi].fx[1].b == 0.0,
-              "and the second one falling");
+        CHECK(q.tracks[vi].fx[2].hold, "and the held one still holds");
         CHECK(NEAR(q.tracks[vi].fxAt(1.0), 0.5, 1e-6), "and it reads back the same");
     }
     CHECK(q.tracks[ai].fx.empty(), "a lane with nothing on it stays empty");
@@ -1044,7 +1113,7 @@ static void test_export()
         /* Two sources, a cut and a fade: everything that forces a render. */
         sn::placeItem(p, a, 0.0);
         sn::placeItem(p, b, 3.0);
-        p.tracks[0].fx.push_back(sn::Fx{sn::FX_FADE, 1.0, 1.5, 1.0, 0.0});
+        sn::fxPreset(p.tracks[0], sn::FX_FADE_OUT, 1.0, 1.5);
 
         sn::ExportSettings s;
         s.path = "media/out_render.mp4";

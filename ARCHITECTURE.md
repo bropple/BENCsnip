@@ -50,7 +50,7 @@ A project is a bin of files and a list of tracks of clips.
 ```
 Clip  = { source, in, out, pos, gain, muted, link, repeat }
 Track = { kind, clips, fx, gain, muted, locked, + a layout for the picture }
-Fx    = { kind, from, to, a, b }
+FxPoint = { t, v, hold }
 ```
 
 A clip is a range of one file placed at a time. There is no transition object,
@@ -89,20 +89,25 @@ the back**. That is the opposite of the convention every other editor uses; it
 is what this one was asked for, and the only defence against the surprise is
 that the reorder buttons say which direction is which.
 
-**Effects are on the track, not the clip.** An `Fx` is a stretch of the
-timeline with a level at each end — a fade in is 0 to 1, a fade out is 1 to 0,
-and that is the whole difference between them. It applies to whatever the
-track produces: how opaque the picture is on a video or text track, the level
-on an audio one. One idea, three meanings, one piece of code.
+**Effects are a curve on the track, not a property of the clip.** A track's
+`fx` is a list of points — a time, a level, and whether it holds — with
+straight lines between them. It applies to whatever the track produces: how
+opaque the picture is on a video *or text* track, the level on an audio one.
+One idea, three meanings, one piece of code, which is why a caption fades
+exactly the way a picture does.
 
-They used to be two numbers on every `Clip`, which could express a fade from a
-clip's start and a fade to its end and nothing else — not a fade across a cut,
-not a dip in the middle, not two of them — and cost every clip in the project
-two doubles it almost never used. As a range on a track it is a thing you can
-see, put anywhere and drag by either end, and it is the shape every effect
-after it will want. Outside a ramp the level *holds* at whatever the last one
-finished on, because a fade out that undid itself the moment it ended would be
-useless for the thing fades are mostly for.
+It got there in two steps, and both are worth knowing. Fades were first two
+numbers on every `Clip`, which could say "from the start" and "to the end" and
+nothing else — not across a cut, not in the middle, not twice. They then became
+a list of ramps on the track, which could at least be put anywhere; but a ramp
+with two ends is still the wrong unit, because the next thing anybody wants is
+another point. Come in, stay, go out is three ramps or four points, and as
+points any one of them drags without disturbing the others.
+
+Two points are a fade. Four are a fade in and out. Sixty-five are a sine, which
+is what the presets are for. Outside the curve the level *holds* at the nearest
+point's value rather than springing back, because a fade out that undid itself
+the moment it finished would be useless for what fades are mostly for.
 
 Each track's clips are kept sorted by `pos` and never overlap. Dropping a clip
 on top of another cuts a hole in the one underneath rather than layering — that

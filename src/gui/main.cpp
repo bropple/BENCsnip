@@ -1525,21 +1525,62 @@ static void menus(App &a)
         return;
     }
 
-    if (tag == 102) {                     /* a ramp on an effects lane */
+    if (tag == 102) {                     /* the effects lane */
         Track *t = a.proj.track(a.fxSel.track);
-        if (!t || a.fxSel.index < 0 || a.fxSel.index >= (int)t->fx.size()) return;
-        Fx &f = t->fx[(size_t)a.fxSel.index];
+        if (!t) return;
 
-        if (pick == 0) {
-            std::swap(f.a, f.b);
-            a.changed();
-            a.say("turned it the other way");
-        } else if (pick == 1) {
-            t->fx.erase(t->fx.begin() + a.fxSel.index);
+        const int what = pick >= 0 && pick < (int)a.fxMenu.size()
+                             ? a.fxMenu[(size_t)pick]
+                             : (int)App::FX_M_NOTHING;
+
+        const double from = a.fxRangeFrom, to = a.fxRangeTo;
+        const bool haveRange = to > from;
+
+        switch (what) {
+        case App::FX_M_IN:
+            if (haveRange) fxPreset(*t, FX_FADE_IN, from, to);
+            break;
+        case App::FX_M_OUT:
+            if (haveRange) fxPreset(*t, FX_FADE_OUT, from, to);
+            break;
+        case App::FX_M_INOUT:
+            if (haveRange) fxPreset(*t, FX_IN_OUT, from, to);
+            break;
+        case App::FX_M_PULSE:
+            if (haveRange) fxPreset(*t, FX_PULSE, from, to);
+            break;
+        case App::FX_M_WAVE:
+            if (haveRange) fxPreset(*t, FX_WAVE, from, to);
+            break;
+
+        case App::FX_M_HOLD:
+            if (a.fxSel.index >= 0 && a.fxSel.index < (int)t->fx.size()) {
+                FxPoint &pt = t->fx[(size_t)a.fxSel.index];
+                pt.hold = !pt.hold;
+                a.say(pt.hold ? "that point holds until the next one"
+                              : "that point slides to the next one");
+            }
+            break;
+
+        case App::FX_M_DELETE:
+            if (a.fxSel.index >= 0 && a.fxSel.index < (int)t->fx.size()) {
+                t->fx.erase(t->fx.begin() + a.fxSel.index);
+                a.fxSel = App::FxRef{};
+            }
+            break;
+
+        case App::FX_M_CLEAR: {
+            const int n = (int)t->fx.size();
+            t->fx.clear();
             a.fxSel = App::FxRef{};
-            a.changed();
-            a.say("effect deleted");
+            a.say("cleared %d point%s from %s", n, n == 1 ? "" : "s", t->name.c_str());
+            break;
         }
+
+        default: return;
+        }
+
+        a.changed();
         return;
     }
 

@@ -120,7 +120,24 @@ struct App {
     };
     std::vector<int> clipMenu;
 
-    /* Which ramp on which effects lane is selected, and which is being
+    /* What each row of the effects lane's menu does, for the same reason
+     * clipMenu exists: the rows depend on whether there is a clip under the
+     * pointer and whether a point was right-clicked. */
+    enum FxAction {
+        FX_M_IN = 0,
+        FX_M_OUT,
+        FX_M_INOUT,
+        FX_M_PULSE,
+        FX_M_WAVE,
+        FX_M_HOLD,
+        FX_M_DELETE,
+        FX_M_CLEAR,
+        FX_M_NOTHING
+    };
+    std::vector<int> fxMenu;
+    double fxRangeFrom = 0, fxRangeTo = 0;   /* what a preset would cover */
+
+    /* Which point on which effects lane is selected, and which is being
      * dragged. An index rather than an id: effects are a small sorted vector
      * on a track and nothing outside this refers to one. */
     struct FxRef {

@@ -116,50 +116,28 @@ struct Clip {
 
 /* --- effects -------------------------------------------------------- *
  *
- * An effect is a stretch of the timeline on a track, not a property of a clip.
+ * A track's effects lane is a curve: a list of points, each a time and a
+ * level, with straight lines between them.
  *
- * Fades used to be two numbers on every Clip, and it was a fade in from the
- * clip's start and a fade out to its end and nothing else was expressible: not
- * a fade across a cut, not a dip in the middle, not two of them. It also meant
- * every clip in the project carried two doubles it almost never used, and the
- * only way to reach them was a handle in a corner of the clip - the same corner
- * the trim handle is in.
+ * Fades used to be two numbers on every Clip - a ramp up from its start and a
+ * ramp down to its end - and nothing else was expressible. They then became a
+ * list of ramps on the track, which could at least be put anywhere; but a ramp
+ * with two ends is still the wrong unit, because the thing people want next is
+ * always another point. Come in, stay, go out is three ramps or four points,
+ * and as points you can drag any one of them without touching the others.
  *
- * As a range on the track, a fade is a thing you can see, put anywhere, and
- * drag by either end. It is also the shape every effect after it will want,
- * which is the point of the lane it lives in.
+ * So: points. Two of them are a fade. Four are a fade in and out. Sixty-four
+ * are a sine, which is what the presets are for.
  * ------------------------------------------------------------------- */
 
-enum FxKind {
-    FX_FADE = 0        /* a ramp between two levels                     */
-};
+struct FxPoint {
+    double t = 0.0;          /* timeline seconds                        */
+    double v = 1.0;          /* 0 is nothing, 1 is untouched            */
 
-struct Fx {
-    FxKind kind = FX_FADE;
-    double from = 0.0;       /* timeline seconds                        */
-    double to = 0.0;
-
-    /* The value at each end. A fade in is 0 to 1 and a fade out is 1 to 0,
-     * which is the whole difference between them - there is no direction
-     * flag, because a ramp already knows which way it goes. */
-    double a = 0.0, b = 1.0;
-
-    double dur() const { return to - from; }
-    bool covers(double t) const { return t >= from && t < to; }
-
-    /* Straight line between the ends, and flat outside: before it, whatever
-     * it starts at; after it, whatever it ends at.
-     *
-     * Flat rather than back to 1, so a fade out leaves the picture down until
-     * something raises it again. A ramp that undid itself the moment it
-     * finished would be unusable for the thing fades are mostly for. */
-    double at(double t) const
-    {
-        if (dur() <= 0.0) return b;
-        if (t <= from) return a;
-        if (t >= to) return b;
-        return a + (b - a) * ((t - from) / dur());
-    }
+    /* Hold this level until the next point instead of sliding to it. Two
+     * points and a hold are a step, which is what makes a square wave square
+     * rather than a triangle with steep sides. */
+    bool hold = false;
 };
 
 enum TrackKind { TRACK_VIDEO = 0, TRACK_AUDIO = 1, TRACK_TEXT = 2 };
@@ -196,18 +174,20 @@ struct Track {
     double gain = 1.0;
     std::vector<Clip> clips; /* kept sorted by pos, always               */
 
-    /* What this track's output is put through, sorted by `from` and never
-     * overlapping - the same discipline the clips keep, and for the same
-     * reason: two ramps over one moment have no one answer.
+    /* The curve this track's output is put through, sorted by time.
      *
      * It applies to whatever the track produces. On a video or a text track
-     * that is how opaque the picture is; on an audio track it is the level.
-     * One idea, three meanings, and the lane under the track is where it is
-     * edited. */
-    std::vector<Fx> fx;
+     * that is how opaque the picture is - a caption fades exactly the way a
+     * picture does, because it is the same number. On an audio track it is
+     * the level. One idea, three meanings, and the lane under the track is
+     * where it is edited. */
+    std::vector<FxPoint> fx;
 
-    /* The level this track's fx put it at, at time t. 1.0 - unchanged - when
-     * there is nothing on the lane, or before the first ramp on it. */
+    /* The level the curve is at, at time t. 1.0 - untouched - when the lane
+     * is empty. Before the first point and after the last it is that point's
+     * level, held: a curve says what it says for as long as it exists, and a
+     * fade out that sprang back the moment it finished would be useless for
+     * the thing fades are mostly for. */
     double fxAt(double t) const;
 
     /* --- where this track's picture sits on the canvas (video only) ---
@@ -350,6 +330,29 @@ bool removeClip(Project &p, const ClipRef &r, bool ripple = false);
  * been pulled apart is being treated as two things, and dragging the picture
  * should not drag one of them and not the other. */
 int splitChannels(Project &p, const ClipRef &r);
+
+/* --- effects presets ------------------------------------------------ *
+ *
+ * The shapes worth having a name for. Everything here is points on the curve
+ * when it is done - there is no preset object to edit later, because a preset
+ * that stayed a preset would be a second way to say what the points already
+ * say, and the point of the curve is that any of them can be dragged.
+ * ------------------------------------------------------------------- */
+enum FxShape {
+    FX_FADE_IN = 0,
+    FX_FADE_OUT,
+    FX_IN_OUT,       /* up, hold, down: the one people build by hand    */
+    FX_PULSE,        /* square: on, off, on, off                        */
+    FX_WAVE          /* sine, from nothing up to full and back          */
+};
+
+/* Put `shape` on the track's curve over [from, to], replacing whatever was
+ * inside that stretch. `cycles` is how many times a repeating shape repeats
+ * across it and is ignored by the others. */
+void fxPreset(Track &t, FxShape shape, double from, double to, int cycles = 4);
+
+/* Sorted by time, and nothing on top of anything. Run after moving a point. */
+void fxTidy(Track &t);
 
 /* Move a clip to a new position and possibly a new track. Returns where it
  * actually landed, which may differ if it was blocked. */

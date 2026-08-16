@@ -179,10 +179,10 @@ bool saveProject(const Project &p, const std::string &path, std::string *err)
          * file it was before this existed. */
         if (t.gain != 1.0) fprintf(f, "level %.6f\n", t.gain);
 
-        /* One line per effect, after the track and before its clips. */
-        for (const Fx &x : t.fx)
-            fprintf(f, "fx %d %.6f %.6f %.6f %.6f\n", (int)x.kind, x.from, x.to, x.a,
-                    x.b);
+        /* One line per point on the effects curve, after the track and before
+         * its clips. */
+        for (const FxPoint &x : t.fx)
+            fprintf(f, "fxp %.6f %.6f %d\n", x.t, x.v, x.hold ? 1 : 0);
         for (const Clip &c : t.clips) {
             /* The two zeroes are where a clip's fadeIn and fadeOut used to
              * be. The fields stay so that the eleven numbers on this line
@@ -321,15 +321,28 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
                                    &t.cropB, &t.scaleY, &stretch);
             if (got < 8) t.scaleY = t.scaleX;
             t.stretch = stretch != 0;
-        } else if (!strncmp(line, "fx ", 3)) {
+        } else if (!strncmp(line, "fxp ", 4)) {
             if (trackAt < 0) continue;
-            Fx x;
+            FxPoint x;
+            int hold = 0;
+            if (sscanf(line + 4, "%lf %lf %d", &x.t, &x.v, &hold) < 2) continue;
+            x.hold = hold != 0;
+            x.v = x.v < 0.0 ? 0.0 : (x.v > 1.0 ? 1.0 : x.v);
+            p.tracks[trackAt].fx.push_back(x);
+        } else if (!strncmp(line, "fx ", 3)) {
+            /* A ramp, from the short-lived arrangement where the lane held
+             * ramps rather than points. Two points say the same thing, so it
+             * is read rather than dropped - a project written last week
+             * should not lose its fades to a change of mind about how they
+             * are stored. */
+            if (trackAt < 0) continue;
             int kind = 0;
-            if (sscanf(line + 3, "%d %lf %lf %lf %lf", &kind, &x.from, &x.to, &x.a,
-                       &x.b) < 5)
+            double from = 0, to = 0, va = 0, vb = 1;
+            if (sscanf(line + 3, "%d %lf %lf %lf %lf", &kind, &from, &to, &va, &vb) < 5)
                 continue;
-            x.kind = FX_FADE;              /* the only one there is, so far */
-            if (x.to > x.from) p.tracks[trackAt].fx.push_back(x);
+            if (to <= from) continue;
+            p.tracks[trackAt].fx.push_back(FxPoint{from, va, false});
+            p.tracks[trackAt].fx.push_back(FxPoint{to, vb, false});
         } else if (!strncmp(line, "level ", 6)) {
             if (trackAt < 0) continue;
             double g = 1.0;
@@ -407,7 +420,7 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
         std::sort(t.clips.begin(), t.clips.end(),
                   [](const Clip &a, const Clip &b) { return a.pos < b.pos; });
         std::sort(t.fx.begin(), t.fx.end(),
-                  [](const Fx &a, const Fx &b) { return a.from < b.from; });
+                  [](const FxPoint &a, const FxPoint &b) { return a.t < b.t; });
     }
 
     if (droppedFades && err)

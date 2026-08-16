@@ -35,18 +35,22 @@ Clip *Track::at(double t)
 double Track::fxAt(double t) const
 {
     if (fx.empty()) return 1.0;
+    if (t <= fx.front().t) return fx.front().v;
+    if (t >= fx.back().t) return fx.back().v;
 
-    /* The ramps are sorted and do not overlap, so the answer is the one that
-     * covers t - and where none does, the one before it, held at the level it
-     * finished on. Before the first, nothing has happened yet. */
-    double v = 1.0;
-    bool started = false;
-    for (const Fx &f : fx) {
-        if (f.from > t) break;
-        v = f.at(t);
-        started = true;
+    /* The segment t falls in. A handful of points on a lane, walked; a binary
+     * search would be the same answer and more to read. */
+    for (size_t i = 1; i < fx.size(); i++) {
+        if (fx[i].t < t) continue;
+
+        const FxPoint &p0 = fx[i - 1], &p1 = fx[i];
+        if (p0.hold) return p0.v;
+
+        const double span = p1.t - p0.t;
+        if (span <= 0.0) return p1.v;
+        return p0.v + (p1.v - p0.v) * ((t - p0.t) / span);
     }
-    return started ? v : 1.0;
+    return fx.back().v;
 }
 
 bool Track::transformed() const
@@ -412,6 +416,94 @@ static std::vector<ClipRef> linked(const Project &p, const ClipRef &r)
             if (x.link == c->link && !(x.id == c->id && (int)ti == r.track))
                 v.push_back(ClipRef{(int)ti, x.id});
     return v;
+}
+
+void fxTidy(Track &t)
+{
+    std::sort(t.fx.begin(), t.fx.end(),
+              [](const FxPoint &a, const FxPoint &b) { return a.t < b.t; });
+
+    for (FxPoint &p : t.fx) {
+        if (p.t < 0.0) p.t = 0.0;
+        if (p.v < 0.0) p.v = 0.0;
+        if (p.v > 1.0) p.v = 1.0;
+    }
+
+    /* Two points at the same moment are one point with an argument. The later
+     * one wins, because it is the one just dragged there. */
+    for (size_t i = 1; i < t.fx.size();) {
+        if (t.fx[i].t - t.fx[i - 1].t < 1e-6) t.fx.erase(t.fx.begin() + (long)(i - 1));
+        else i++;
+    }
+}
+
+void fxPreset(Track &t, FxShape shape, double from, double to, int cycles)
+{
+    if (to <= from) return;
+    if (cycles < 1) cycles = 1;
+
+    /* Out with whatever was in that stretch. A preset is a statement about a
+     * range, and leaving the old points inside it would make the result a
+     * combination of two things nobody asked for. */
+    std::vector<FxPoint> keep;
+    for (const FxPoint &p : t.fx)
+        if (p.t < from - 1e-9 || p.t > to + 1e-9) keep.push_back(p);
+
+    const double len = to - from;
+    std::vector<FxPoint> made;
+
+    switch (shape) {
+    case FX_FADE_IN:
+        made.push_back(FxPoint{from, 0.0, false});
+        made.push_back(FxPoint{to, 1.0, false});
+        break;
+
+    case FX_FADE_OUT:
+        made.push_back(FxPoint{from, 1.0, false});
+        made.push_back(FxPoint{to, 0.0, false});
+        break;
+
+    case FX_IN_OUT: {
+        /* A quarter up, a half held, a quarter down. The hold is what makes
+         * it useful: a triangle would be at full for one instant. */
+        const double q = len * 0.25;
+        made.push_back(FxPoint{from, 0.0, false});
+        made.push_back(FxPoint{from + q, 1.0, false});
+        made.push_back(FxPoint{to - q, 1.0, false});
+        made.push_back(FxPoint{to, 0.0, false});
+        break;
+    }
+
+    case FX_PULSE: {
+        /* Held points, so the edges are vertical. A square wave drawn with
+         * sloped points is a triangle wave, and at four cycles across two
+         * seconds the difference is the whole effect. */
+        const double step = len / (cycles * 2);
+        for (int i = 0; i < cycles * 2; i++)
+            made.push_back(FxPoint{from + step * i, (i % 2) ? 0.0 : 1.0, true});
+        made.push_back(FxPoint{to, 1.0, false});
+        break;
+    }
+
+    case FX_WAVE: {
+        /* Sixteen points a cycle. Straight lines between them, and at that
+         * spacing the corners are under a pixel on any timeline anybody
+         * zooms to - a real curve would need a shape per segment, which is a
+         * bigger idea than this needs to be. */
+        const int per = 16;
+        const int n = cycles * per;
+        for (int i = 0; i <= n; i++) {
+            const double x = (double)i / per;   /* in cycles */
+            const double v = 0.5 - 0.5 * std::cos(2.0 * 3.14159265358979323846 * x);
+            made.push_back(FxPoint{from + len * ((double)i / n), v, false});
+        }
+        break;
+    }
+    }
+
+    keep.insert(keep.end(), made.begin(), made.end());
+    t.fx.swap(keep);
+    fxTidy(t);
 }
 
 int splitChannels(Project &p, const ClipRef &r)

@@ -341,8 +341,8 @@ void Renderer::audioAt(double t, int frames, float *dst)
              * almost never - because that loop costs a multiply and a branch
              * per sample and the flat path is a straight scale. */
             bool ramp = false;
-            for (const Fx &f : tr.fx)
-                if (f.from < b && a < f.to) { ramp = true; break; }
+            for (size_t k = 1; k < tr.fx.size(); k++)
+                if (tr.fx[k - 1].t < b && a < tr.fx[k].t) { ramp = true; break; }
             float *o = dst + (size_t)off * CHANS;
 
             if (!ramp) {

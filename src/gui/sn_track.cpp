@@ -353,49 +353,48 @@ static int fx_lane_at(const App &a, Vector2 m, Rectangle r)
     return -1;
 }
 
-/* The ramp under the pointer on that lane, and which end of it - 0 for the
- * left, 1 for the right, -1 for the middle.
- *
- * The ends are found by x alone rather than by how close the pointer is to
- * the grip drawn there. The two ends of a ramp are at different heights, so
- * asking for both coordinates would make the shallow end of a gentle fade
- * harder to grab than the steep end of a sharp one, which is a rule nobody
- * could learn. */
-static int fx_under(const App &a, int idx, Vector2 m, int *end)
+/* Where a level sits on screen inside the strip, and back again. Drawn inside
+ * a margin so a point at 0 and a point at 1 are both fully visible rather
+ * than half outside it. */
+static float fx_y_of(const App &a, int idx, double v)
 {
-    *end = -1;
-    if (idx < 0 || idx >= (int)a.proj.tracks.size()) return -1;
-
-    const Track &t = a.proj.tracks[idx];
-    for (size_t k = 0; k < t.fx.size(); k++) {
-        const float x0 = a.xAt(t.fx[k].from), x1 = a.xAt(t.fx[k].to);
-        if (std::fabs(m.x - x0) <= 7.0f) { *end = 0; return (int)k; }
-        if (std::fabs(m.x - x1) <= 7.0f) { *end = 1; return (int)k; }
-        if (m.x > x0 && m.x < x1) return (int)k;
-    }
-    return -1;
+    Rectangle fr = fx_rect(a, idx);
+    const float top = fr.y + 4, bot = fr.y + fr.height - 4;
+    return bot - (float)v * (bot - top);
 }
 
-/* Sorted, non-overlapping, and nothing of no length - the same discipline the
- * clips keep. Run after anything that moves a ramp. */
-static void tidy_fx(Track &t)
+static double fx_v_of(const App &a, int idx, float y)
 {
-    std::sort(t.fx.begin(), t.fx.end(),
-              [](const Fx &x, const Fx &y) { return x.from < y.from; });
+    Rectangle fr = fx_rect(a, idx);
+    const float top = fr.y + 4, bot = fr.y + fr.height - 4;
+    const double v = (bot - y) / std::max(1.0f, bot - top);
+    return v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v);
+}
 
-    for (size_t i = 0; i < t.fx.size();) {
-        if (i > 0 && t.fx[i].from < t.fx[i - 1].to) t.fx[i].from = t.fx[i - 1].to;
-        if (t.fx[i].to - t.fx[i].from < 0.02) t.fx.erase(t.fx.begin() + (long)i);
-        else i++;
+/* The point under the pointer on that lane, or -1. The nearest one within
+ * reach rather than the first: points can be close together on a wave, and
+ * the one being aimed at is the one closest to the pointer. */
+static int fx_point_at(const App &a, int idx, Vector2 m)
+{
+    if (idx < 0 || idx >= (int)a.proj.tracks.size()) return -1;
+    const Track &t = a.proj.tracks[idx];
+
+    int best = -1;
+    float bestd = 8.0f;
+    for (size_t k = 0; k < t.fx.size(); k++) {
+        const float x = a.xAt(t.fx[k].t), y = fx_y_of(a, idx, t.fx[k].v);
+        const float d = std::max(std::fabs(m.x - x), std::fabs(m.y - y));
+        if (d < bestd) { bestd = d; best = (int)k; }
     }
+    return best;
 }
 
 /* ------------------------------------------------------------------ *
  * The effects lane
  *
- * A ramp is drawn as the line it is - where it starts, where it ends, and
- * what level it is at each end - over a filled area beneath, so the shape can
- * be read from across the timeline without hovering anything.
+ * The curve is drawn as the line it is, over a filled area beneath, so a
+ * level reads as an amount and not only as a height, and the shape can be
+ * read from across the timeline without hovering anything.
  *
  * The lane is thin and empty until something is on it. That is the whole of
  * "collapsed until used": there is no third state to draw and nothing to
@@ -406,41 +405,55 @@ static void draw_fx(App &a, int idx)
 {
     if (idx < 0 || idx >= (int)a.proj.tracks.size()) return;
     const Track &t = a.proj.tracks[idx];
-    Rectangle fr = fx_rect(a, idx);
-
     if (t.fx.empty()) return;
 
-    const float top = fr.y + 3, bot = fr.y + fr.height - 3;
-    const float span = std::max(1.0f, bot - top);
+    Rectangle fr = fx_rect(a, idx);
+    const float bot = fr.y + fr.height - 4;
 
-    for (size_t k = 0; k < t.fx.size(); k++) {
-        const Fx &f = t.fx[k];
-        const float x0 = a.xAt(f.from), x1 = a.xAt(f.to);
+    /* The line the curve makes, and the area under it, so a level reads as an
+     * amount and not only as a height. A held point steps rather than slopes,
+     * which is what makes a square wave square. */
+    for (size_t k = 0; k + 1 < t.fx.size(); k++) {
+        const FxPoint &p0 = t.fx[k], &p1 = t.fx[k + 1];
+        const float x0 = a.xAt(p0.t), x1 = a.xAt(p1.t);
         if (x1 < fr.x || x0 > fr.x + fr.width) continue;
 
-        const float ya = bot - (float)f.a * span;
-        const float yb = bot - (float)f.b * span;
+        const float y0 = fx_y_of(a, idx, p0.v);
+        const float y1 = fx_y_of(a, idx, p0.hold ? p0.v : p1.v);
+
+        sn_triangle(Vector2{x0, bot}, Vector2{x1, bot}, Vector2{x1, y1},
+                    Color{0x78, 0xb9, 0x46, 55});
+        sn_triangle(Vector2{x0, bot}, Vector2{x1, y1}, Vector2{x0, y0},
+                    Color{0x78, 0xb9, 0x46, 55});
+
+        DrawLineEx(Vector2{x0, y0}, Vector2{x1, y1}, 1.0f, SN_ACCENT);
+        if (p0.hold)
+            DrawLineEx(Vector2{x1, y1}, Vector2{x1, fx_y_of(a, idx, p1.v)}, 1.0f,
+                       SN_ACCENT);
+    }
+
+    /* Before the first point and after the last the curve holds, and that is
+     * drawn too - a fade at the end of a track should not look like it stops
+     * being in force there. */
+    {
+        const float xf = a.xAt(t.fx.front().t), xl = a.xAt(t.fx.back().t);
+        const float yf = fx_y_of(a, idx, t.fx.front().v);
+        const float yl = fx_y_of(a, idx, t.fx.back().v);
+        const Color faint = {0x78, 0xb9, 0x46, 90};
+        if (xf > fr.x) DrawLineEx(Vector2{fr.x, yf}, Vector2{xf, yf}, 1.0f, faint);
+        if (xl < fr.x + fr.width)
+            DrawLineEx(Vector2{xl, yl}, Vector2{fr.x + fr.width, yl}, 1.0f, faint);
+    }
+
+    for (size_t k = 0; k < t.fx.size(); k++) {
+        const float x = a.xAt(t.fx[k].t), y = fx_y_of(a, idx, t.fx[k].v);
+        if (x < fr.x - 6 || x > fr.x + fr.width + 6) continue;
 
         const bool sel = a.fxSel.track == idx && a.fxSel.index == (int)k;
-
-        /* Under the line: the level, so a ramp reads as an amount and not
-         * only as a slope. */
-        sn_triangle(Vector2{x0, bot}, Vector2{x1, bot}, Vector2{x1, yb},
-                    Color{0x78, 0xb9, 0x46, 60});
-        sn_triangle(Vector2{x0, bot}, Vector2{x1, yb}, Vector2{x0, ya},
-                    Color{0x78, 0xb9, 0x46, 60});
-
-        DrawLineEx(Vector2{x0, ya}, Vector2{x1, yb}, sel ? 2.0f : 1.0f,
-                   sel ? SN_TEXT : SN_ACCENT);
-
-        /* A grip at each end, which is what the ends are dragged by. */
         const float g = sel ? 4.0f : 3.0f;
-        for (int e = 0; e < 2; e++) {
-            const float gx = e ? x1 : x0, gy = e ? yb : ya;
-            DrawRectangleRec(Rectangle{gx - g, gy - g, g * 2, g * 2}, SN_BG);
-            DrawRectangleLinesEx(Rectangle{gx - g, gy - g, g * 2, g * 2}, 1,
-                                 sel ? SN_TEXT : SN_ACCENT);
-        }
+        DrawRectangleRec(Rectangle{x - g, y - g, g * 2, g * 2}, SN_BG);
+        DrawRectangleLinesEx(Rectangle{x - g, y - g, g * 2, g * 2}, 1,
+                             sel ? SN_TEXT : SN_ACCENT);
     }
 }
 
@@ -918,37 +931,34 @@ void timelinePane(App &a, Rectangle r)
             a.drag = DRAG_SCRUB;
             a.follow = false;
         } else if (fxLane >= 0 && !a.proj.tracks[fxLane].locked) {
-            /* The effects lane. Tested before the clips and before the
-             * "clicked on nothing, move the playhead" case below, because it
-             * is inside a track's block and would otherwise be neither. */
-            int end = -1;
-            const int k = fx_under(a, fxLane, m, &end);
+            /* The effects lane. Tested before the clips and before the click
+             * that selects nothing, because it is inside a track's block and
+             * would otherwise be neither.
+             *
+             * One rule: a press on a point picks that point up, and a press
+             * anywhere else puts a new one there and picks that up. So the
+             * first point on an empty lane and the ninth on a busy one are
+             * the same gesture, and there is no mode to be in. */
             Track &t = a.proj.tracks[fxLane];
+            int k = fx_point_at(a, fxLane, m);
 
-            if (k >= 0) {
-                a.fxSel = App::FxRef{fxLane, k};
-                a.fxDrag = a.fxSel;
-                a.fxGrabFrom = t.fx[(size_t)k].from;
-                a.fxGrabTo = t.fx[(size_t)k].to;
-                a.drag = end == 0 ? DRAG_FX_IN : end == 1 ? DRAG_FX_OUT : DRAG_FX;
-            } else {
-                /* Drawing a new one. It exists from the first frame of the
-                 * drag rather than appearing on release, so the shape being
-                 * made is the shape on screen; a ramp shorter than a moment
-                 * is thrown away by tidy_fx when the button comes up. */
-                Fx f;
-                f.from = f.to = std::max(0.0, a.timeAt(m.x));
-                f.a = 0.0;
-                f.b = 1.0;
-                t.fx.push_back(f);
+            if (k < 0) {
+                FxPoint np;
+                np.t = std::max(0.0, snap_time(a, a.timeAt(m.x), nullptr));
+                np.v = fx_v_of(a, fxLane, m.y);
+                t.fx.push_back(np);
+                fxTidy(t);
 
-                a.fxNewAt = f.from;
-                a.fxSel = App::FxRef{fxLane, (int)t.fx.size() - 1};
-                a.fxDrag = a.fxSel;
-                a.drag = DRAG_FX_NEW;
+                k = -1;
+                for (size_t i = 0; i < t.fx.size(); i++)
+                    if (std::fabs(t.fx[i].t - np.t) < 1e-9) k = (int)i;
             }
+
+            a.fxSel = App::FxRef{fxLane, k};
+            a.fxDrag = a.fxSel;
             a.dragFrom = m;
             a.dragMoved = false;
+            a.drag = DRAG_FX;
         } else if (overClip.ok() && !a.proj.tracks[overClip.track].locked) {
             const Clip *c = a.proj.clip(overClip);
             a.select(overClip, IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT));
@@ -958,13 +968,15 @@ void timelinePane(App &a, Rectangle r)
             a.dragMoved = false;
             a.dragGrab = a.timeAt(m.x) - (c ? c->pos : 0);
         } else if (overTrack >= 0) {
+            /* Clicking empty timeline selects nothing, and that is all.
+             *
+             * It used to move the playhead as well, on the grounds that it
+             * saves a trip to the ruler. What it actually saves is the trip;
+             * what it costs is every click that was meant for something else -
+             * a clip on a locked track, the two pixels above a clip, an empty
+             * stretch beside one - throwing the playhead across the timeline
+             * and the sound with it. The ruler is where scrubbing lives. */
             a.clearSel();
-            /* Clicking empty timeline moves the playhead there, which is
-             * what everyone expects and saves a trip to the ruler. */
-            a.playhead = std::max(0.0, snap_time(a, a.timeAt(m.x), nullptr));
-            a.player.seek(a.playhead);
-            a.drag = DRAG_SCRUB;
-            a.follow = false;
         }
     }
 
@@ -1004,36 +1016,13 @@ void timelinePane(App &a, Rectangle r)
             a.changed(true);
             break;
         }
-        case DRAG_FX:
-        case DRAG_FX_IN:
-        case DRAG_FX_OUT:
-        case DRAG_FX_NEW: {
+        case DRAG_FX: {
             Track *t = a.proj.track(a.fxDrag.track);
             if (!t || a.fxDrag.index < 0 || a.fxDrag.index >= (int)t->fx.size()) break;
-            Fx &f = t->fx[(size_t)a.fxDrag.index];
 
-            const double now = std::max(0.0, snap_time(a, a.timeAt(m.x), nullptr));
-
-            if (a.drag == DRAG_FX_NEW) {
-                /* Which way the ramp goes is which way it was drawn. A rise
-                 * is a fade in and a fall is a fade out, so the gesture and
-                 * the result are the same shape and there is no direction to
-                 * choose from a menu afterwards. */
-                f.from = std::min(a.fxNewAt, now);
-                f.to = std::max(a.fxNewAt, now);
-                const bool rising = now >= a.fxNewAt;
-                f.a = rising ? 0.0 : 1.0;
-                f.b = rising ? 1.0 : 0.0;
-            } else if (a.drag == DRAG_FX_IN) {
-                f.from = std::min(now, a.fxGrabTo - 0.02);
-            } else if (a.drag == DRAG_FX_OUT) {
-                f.to = std::max(now, a.fxGrabFrom + 0.02);
-            } else {
-                const double d = a.timeAt(m.x) - a.timeAt(a.dragFrom.x);
-                const double len = a.fxGrabTo - a.fxGrabFrom;
-                f.from = std::max(0.0, a.fxGrabFrom + d);
-                f.to = f.from + len;
-            }
+            FxPoint &pt = t->fx[(size_t)a.fxDrag.index];
+            pt.t = std::max(0.0, snap_time(a, a.timeAt(m.x), nullptr));
+            pt.v = fx_v_of(a, a.fxDrag.track, m.y);
             a.changed(true);
             break;
         }
@@ -1098,26 +1087,20 @@ void timelinePane(App &a, Rectangle r)
     /* --- finishing --- */
     if (a.drag != DRAG_NONE && a.drag != DRAG_FROM_BIN &&
         IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
-        const bool wasFx = a.drag == DRAG_FX || a.drag == DRAG_FX_IN ||
-                           a.drag == DRAG_FX_OUT || a.drag == DRAG_FX_NEW;
-
-        if (wasFx) {
+        if (a.drag == DRAG_FX) {
             Track *t = a.proj.track(a.fxDrag.track);
             if (t) {
-                /* Remember which ramp this was by its ends, because tidying
-                 * sorts the vector and the index it had is not the index it
-                 * keeps. */
-                double from = -1, to = -1;
-                if (a.fxDrag.index >= 0 && a.fxDrag.index < (int)t->fx.size()) {
-                    from = t->fx[(size_t)a.fxDrag.index].from;
-                    to = t->fx[(size_t)a.fxDrag.index].to;
-                }
-                tidy_fx(*t);
+                /* Remember which point this was by where it is, because
+                 * tidying sorts the vector and the index it had is not the
+                 * index it keeps. */
+                double at = -1;
+                if (a.fxDrag.index >= 0 && a.fxDrag.index < (int)t->fx.size())
+                    at = t->fx[(size_t)a.fxDrag.index].t;
+                fxTidy(*t);
 
                 a.fxSel = App::FxRef{};
                 for (size_t k = 0; k < t->fx.size(); k++)
-                    if (std::fabs(t->fx[k].from - from) < 1e-9 &&
-                        std::fabs(t->fx[k].to - to) < 1e-9)
+                    if (std::fabs(t->fx[k].t - at) < 1e-9)
                         a.fxSel = App::FxRef{a.fxDrag.track, (int)k};
             }
             a.fxDrag = App::FxRef{};
@@ -1128,15 +1111,48 @@ void timelinePane(App &a, Rectangle r)
         a.drag = DRAG_NONE;
     }
 
-    /* --- right-click a ramp --- */
+    /* --- right-click the effects lane --- */
     if (inside && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && fxLane >= 0) {
-        int end = -1;
-        const int k = fx_under(a, fxLane, m, &end);
-        if (k >= 0) {
-            a.fxSel = App::FxRef{fxLane, k};
-            static const char *fitems[] = {"turn it the other way", "delete"};
-            sn_menu_open(&ui, m, fitems, 2, 102);
+        const int k = fx_point_at(a, fxLane, m);
+        a.fxSel = App::FxRef{fxLane, k};
+
+        /* Where a preset would go: the clip under the pointer on this track,
+         * because "make this bit pulse" is what somebody reaching for one
+         * means. With nothing under the pointer there is nothing to shape,
+         * and the rows that need a range are left out. */
+        const double at = a.timeAt(m.x);
+        const Clip *c = a.proj.tracks[fxLane].at(at);
+        a.fxRangeFrom = c ? c->pos : 0.0;
+        a.fxRangeTo = c ? c->end() : 0.0;
+
+        static const char *fitems[8];
+        int n = 0;
+        a.fxMenu.clear();
+        auto add = [&](const char *label, App::FxAction what) {
+            fitems[n++] = label;
+            a.fxMenu.push_back((int)what);
+        };
+
+        if (c) {
+            add("fade in over this clip", App::FX_M_IN);
+            add("fade out over this clip", App::FX_M_OUT);
+            add("in and out over this clip", App::FX_M_INOUT);
+            add("pulse it", App::FX_M_PULSE);
+            add("wave over it", App::FX_M_WAVE);
         }
+        if (k >= 0) {
+            if (n) add("-", App::FX_M_NOTHING);
+            add(a.proj.tracks[fxLane].fx[(size_t)k].hold ? "let this point slide"
+                                                         : "hold this point",
+                App::FX_M_HOLD);
+            add("delete this point", App::FX_M_DELETE);
+        }
+        if (!a.proj.tracks[fxLane].fx.empty()) {
+            if (n) add("-", App::FX_M_NOTHING);
+            add("clear the lane", App::FX_M_CLEAR);
+        }
+
+        if (n) sn_menu_open(&ui, m, fitems, n, 102);
     }
 
     /* --- double-click a caption: the window with the words in it ---
