@@ -840,7 +840,8 @@ const HelpRow HELP[] = {
     {nullptr, "TRACKS"},
     {"+V  +A", "add a video or an audio track. New ones go below"},
     {"the arrows", "move a track up or down. The top row is the BACK"},
-    {"the switches", "hide or mute it, lock it, crop it, delete it"},
+    {"click a head", "show that track in the panel on the right"},
+    {"the switches", "hide or mute it, lock it, delete it"},
     {"the fader", "an audio track's level, on top of each clip's"},
 };
 

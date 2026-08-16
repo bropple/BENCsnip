@@ -539,6 +539,7 @@ static void draw_ruler(App &a, Rectangle r)
 static void draw_heads(App &a)
 {
     sn_ui &ui = a.ui;
+    const Vector2 m = GetMousePosition();
 
     /* The gutter above the heads, which is otherwise empty ruler. Two buttons
      * rather than one: what a person wants is either a video track or an
@@ -578,7 +579,14 @@ static void draw_heads(App &a)
         if (h.y + h.height < a.rTimeline.y + RULER_H) continue;
         if (h.y > a.rTimeline.y + a.rTimeline.height) break;
 
-        DrawRectangleRec(h, SN_PANEL);
+        /* The one the inspector is about is lit, so which track the panel on
+         * the right is describing is a thing you can see rather than
+         * remember. */
+        const bool showing = (t.kind == TRACK_VIDEO && a.layoutTrack == (int)i) ||
+                             (t.kind == TRACK_TEXT && a.textClip.track == (int)i &&
+                              a.inspect.open);
+
+        DrawRectangleRec(h, showing ? SN_PANEL_HI : SN_PANEL);
         DrawLine((int)(h.x + h.width) - 1, (int)h.y, (int)(h.x + h.width) - 1,
                  (int)(h.y + h.height), SN_BORDER);
 
@@ -686,7 +694,6 @@ static void draw_heads(App &a)
         Rectangle b1 = {h.x + 6, by, 20, 18};
         Rectangle b2 = {h.x + 29, by, 20, 18};
         Rectangle b3 = {h.x + 52, by, 20, 18};
-        Rectangle b4 = {h.x + 78, by, 20, 18};
 
         if (visualTrack(t.kind)) {
             if (sn_icon_button(&ui, id, b1, t.muted ? SN_I_EYE_OFF : SN_I_EYE, 1, t.muted,
@@ -707,17 +714,6 @@ static void draw_heads(App &a)
             a.changed(true);
         }
 
-        if (t.kind == TRACK_VIDEO) {
-            if (sn_icon_button(&ui, id + 4, b3, SN_I_CROP, 1, t.transformed(),
-                               "size, position and crop for this track")) {
-                a.layoutTrack = (int)i;
-                a.inspectPage = App::INSPECT_LAYOUT;
-                a.inspectScroll = 0.0f;
-                a.inspect.open = true;
-                a.inspect.touched = GetTime();
-            }
-        }
-
         /* Only ever one of a kind left: something has to be there to drop a
          * file onto, and a delete that silently does nothing is worse than a
          * button that says it cannot.
@@ -730,7 +726,7 @@ static void draw_heads(App &a)
             if (x.kind == t.kind) sameKind++;
         const bool canDrop = t.kind == TRACK_TEXT || sameKind > 1;
 
-        if (sn_icon_button(&ui, id + 5, b4, SN_I_TRASH, canDrop, 0,
+        if (sn_icon_button(&ui, id + 5, b3, SN_I_TRASH, canDrop, 0,
                            canDrop ? "delete this track and everything on it"
                                    : "the last track of its kind stays") &&
             canDrop) {
@@ -740,6 +736,54 @@ static void draw_heads(App &a)
             a.changed();
             a.say("deleted %s", nm.c_str());
             break;   /* the vector moved under us */
+        }
+
+        /* --- clicking the head shows the track in the panel ---
+         *
+         * This replaced a button that did the same thing, back when the same
+         * thing was a window. A head with a row of switches on it does not
+         * need a fifth switch whose job is "and now tell me about this track";
+         * clicking the track is what that means.
+         *
+         * Anywhere on the head that is not already a control. The switches,
+         * the reorder arrows and the level fader are all listed rather than
+         * inferred, because a press that both moved a track up and opened the
+         * panel would be one gesture doing two things.
+         */
+        if (CheckCollisionPointRec(m, h) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+            !sn_ui_blocked(&ui)) {
+            const Rectangle taken[] = {up, dn, b1, b2, b3,
+                                       {h.x + 6, h.y + 20, h.width - 12, 12}};
+            bool onControl = false;
+            for (const Rectangle &q : taken)
+                if (CheckCollisionPointRec(m, q)) onControl = true;
+
+            if (!onControl) {
+                if (t.kind == TRACK_VIDEO) {
+                    a.layoutTrack = (int)i;
+                    a.sel.clear();
+                    a.inspectPage = App::INSPECT_LAYOUT;
+                    a.inspectScroll = 0.0f;
+                    a.inspect.open = true;
+                    a.inspect.touched = GetTime();
+                } else if (t.kind == TRACK_TEXT) {
+                    /* A text track has no layout of its own; what it has is
+                     * whichever caption the playhead is inside. */
+                    const Clip *c = t.at(a.playhead);
+                    if (c) {
+                        a.layoutTrack = -1;
+                        a.textClip = ClipRef{(int)i, c->id};
+                        a.sel.clear();
+                        a.sel.push_back(a.textClip);
+                        a.inspectPage = App::INSPECT_TEXT;
+                        a.inspectScroll = 0.0f;
+                        a.inspect.open = true;
+                        a.inspect.touched = GetTime();
+                    } else {
+                        a.say("no caption under the playhead on %s", t.name.c_str());
+                    }
+                }
+            }
         }
     }
 

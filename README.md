@@ -70,8 +70,9 @@ middle piece and press **Shift+Delete**. Then **Ctrl+E**.
   leave — or stay for good if you pin them. Everything about a video layer or
   a caption is in the right-hand one, adjustable while the thing you are
   adjusting is on screen and the transport still works.
-* **A layout per video track.** Size, position, crop and mirrors, relative to
-  the canvas, so a small video can play in the corner of a big one or two can sit
+* **A layout per video track.** Click a track's head — or its picture on the
+  preview — and the right-hand panel is about it. Size, position, crop and
+  mirrors, relative to the canvas, so a small video can play in the corner of a big one or two can sit
   side by side. There are presets for the layouts anyone actually wants. The
   canvas itself — size and frame rate — is a button in the toolbar, so a
   vertical or square project is two clicks. **?** in the toolbar lists every
