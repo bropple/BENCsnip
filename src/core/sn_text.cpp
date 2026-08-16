@@ -563,6 +563,36 @@ bool drawText(const TextStyle &st, uint8_t *rgba, int w, int h, double alpha)
     return true;
 }
 
+bool textMoveTo(TextStyle *st, double cx, double cy, int w, int h)
+{
+    if (!st || w <= 0 || h <= 0) return false;
+
+    bool fell = false;
+    const Metrics m = measure(*st, h, &fell);
+    if (!m.ok) return false;
+
+    /* The same box placement() is given, worked out the same way. */
+    const double outPx = st->outlineWidth > 0 ? st->outlineWidth * st->size * h : 0.0;
+    const int pad = (int)std::ceil(outPx) + 1;
+    const double lw = std::ceil(m.w) + 2 * pad;
+    const double lh = std::ceil(m.h) + 2 * pad;
+    const double ah = std::ceil(m.lineH) + 2 * pad;
+
+    /* Across, the whole width sits in the free space; down, only the first
+     * line does. Turning that round: x from the width, y from the anchor.
+     *
+     * A caption wider or taller than the canvas has no free space to be a
+     * fraction of, and there is no position that means anything - so it stays
+     * where it is rather than being sent to an arbitrary edge. */
+    const double freeW = w - lw, freeH = h - ah;
+    if (std::fabs(freeW) >= 1.0) st->x = (cx - lw * 0.5) / (freeW * 0.5) - 1.0;
+    if (std::fabs(freeH) >= 1.0) st->y = (cy - lh * 0.5) / (freeH * 0.5) - 1.0;
+
+    st->x = st->x < -4.0 ? -4.0 : (st->x > 4.0 ? 4.0 : st->x);
+    st->y = st->y < -4.0 ? -4.0 : (st->y > 4.0 ? 4.0 : st->y);
+    return true;
+}
+
 bool textBox(const TextStyle &st, int w, int h, double corners[8])
 {
     if (!corners || w <= 0 || h <= 0) return false;

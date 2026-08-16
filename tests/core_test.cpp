@@ -1647,6 +1647,63 @@ static void test_text()
     CHECK((k3[5] - k3[1]) > bh * 1.5, "and is most of twice as tall, %f vs %f",
           k3[5] - k3[1], bh);
 
+    /* --- grabbing one moves it by exactly what you dragged ---
+     *
+     * textMoveTo is the inverse of where a caption is placed, and the reason
+     * it exists is that the interface used to work that out for itself. When
+     * the placement changed - to hang extra lines below the first rather than
+     * recentre the block - only one of the two copies changed, and a two line
+     * caption jumped fifty-eight pixels the instant it was grabbed. This
+     * checks the two are still each other's opposite, which is the thing that
+     * went wrong rather than the arithmetic itself.
+     */
+    {
+        auto centre = [](const double k[8], double *cx, double *cy) {
+            *cx = (k[0] + k[2] + k[4] + k[6]) * 0.25;
+            *cy = (k[1] + k[3] + k[5] + k[7]) * 0.25;
+        };
+
+        const char *shapes[3] = {"ONE", "TWO\nLINES", "THREE\nSHORT\nLINES"};
+        const double sizes[2] = {0.09, 0.25};
+
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 2; j++) {
+                sn::TextStyle t;
+                t.text = shapes[i];
+                t.size = sizes[j];
+                t.y = 0.5;
+                t.lineSpacing = 1.2;
+
+                double k0[8];
+                if (!sn::textBox(t, 1280, 720, k0)) { CHECK(false, "no box"); continue; }
+                double cx = 0, cy = 0;
+                centre(k0, &cx, &cy);
+
+                /* Put it back where it already is: nothing should move. */
+                sn::TextStyle still = t;
+                CHECK(sn::textMoveTo(&still, cx, cy, 1280, 720), "it can be placed");
+                double k1[8];
+                sn::textBox(still, 1280, 720, k1);
+                double sx = 0, sy = 0;
+                centre(k1, &sx, &sy);
+                CHECK(NEAR(sx, cx, 0.51) && NEAR(sy, cy, 0.51),
+                      "%s at %.2f does not jump when grabbed, moved %+.2f,%+.2f",
+                      shapes[i], sizes[j], sx - cx, sy - cy);
+
+                /* And a drag lands exactly where the drag went. */
+                sn::TextStyle moved = t;
+                sn::textMoveTo(&moved, cx + 100, cy + 40, 1280, 720);
+                double k2[8];
+                sn::textBox(moved, 1280, 720, k2);
+                double mx = 0, my = 0;
+                centre(k2, &mx, &my);
+                CHECK(NEAR(mx - cx, 100.0, 0.51) && NEAR(my - cy, 40.0, 0.51),
+                      "%s at %.2f moves by what it was dragged, got %+.1f,%+.1f",
+                      shapes[i], sizes[j], mx - cx, my - cy);
+            }
+        }
+    }
+
     /* Whatever this machine has. Not required to be more than none - a
      * container with no fonts installed is a legal place to run the tests -
      * but everything it does report has to be usable. */

@@ -131,6 +131,20 @@ bool drawText(const TextStyle &st, uint8_t *rgba, int w, int h, double alpha = 1
  */
 bool textBox(const TextStyle &st, int w, int h, double corners[8]);
 
+/* Move a caption so that the centre of its box lands on (cx, cy), in canvas
+ * pixels. False when there is nothing to place.
+ *
+ * The inverse of where a caption goes, kept next to the place that decides
+ * where a caption goes. The interface used to work it out itself - the same
+ * three lines of arithmetic, written twice - and when the placement changed to
+ * hang extra lines below the first rather than recentre the block, only one of
+ * the two copies changed. A two line caption then jumped fifty-eight pixels
+ * the instant it was grabbed, and a three line one at a large size jumped
+ * three hundred and twenty-four. Nobody can grab a thing that moves when you
+ * touch it.
+ */
+bool textMoveTo(TextStyle *st, double cx, double cy, int w, int h);
+
 /* Whether the font this style asks for could not be loaded and the embedded
  * face was used instead. For the interface to say so - a project that arrives
  * from another machine naming a font this one has not got should not silently

@@ -653,30 +653,21 @@ void previewPane(App &a, Rectangle r)
                         Vector2 g[4];
                         if (capQuad(a.textGrab, g)) {
                             const Vector2 ctr = centreOf(g);
-                            const double lw = std::hypot(g[1].x - g[0].x, g[1].y - g[0].y) / sc;
-                            const double lh = std::hypot(g[2].x - g[1].x, g[2].y - g[1].y) / sc;
-
                             TextStyle st = a.textGrab;
 
                             if (a.drag == DRAG_TEXT) {
-                                /* The centre moves with the pointer, and then
-                                 * becomes x and y again: fractions of the space
-                                 * left over, which is what makes -1 mean "hard
-                                 * against that edge" at any size. */
+                                /* The centre goes exactly where the pointer
+                                 * has taken it, and textMoveTo turns that back
+                                 * into an x and a y. Working that out here is
+                                 * what made a caption jump the moment it was
+                                 * grabbed: it is the inverse of a placement
+                                 * this file does not own, and the two drifted
+                                 * apart the first time the placement changed. */
                                 const double ncx =
                                     (ctr.x - dst.x) / sc + (m.x - a.layerFrom.x) / sc;
                                 const double ncy =
                                     (ctr.y - dst.y) / sc + (m.y - a.layerFrom.y) / sc;
-
-                                const double freeW = CW - lw, freeH = CH - lh;
-                                st.x = std::fabs(freeW) < 1.0
-                                           ? 0.0
-                                           : (ncx - lw * 0.5) / (freeW * 0.5) - 1.0;
-                                st.y = std::fabs(freeH) < 1.0
-                                           ? 0.0
-                                           : (ncy - lh * 0.5) / (freeH * 0.5) - 1.0;
-                                st.x = std::max(-4.0, std::min(4.0, st.x));
-                                st.y = std::max(-4.0, std::min(4.0, st.y));
+                                textMoveTo(&st, ncx, ncy, CW, CH);
                             } else if (a.drag == DRAG_TEXT_SIZE) {
                                 /* How much further from the centre the pointer
                                  * is than the corner it grabbed. Distance
