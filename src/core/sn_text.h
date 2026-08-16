@@ -85,6 +85,15 @@ struct TextLayer {
     std::vector<uint8_t> rgba;
     int w = 0, h = 0;
 
+    /* How tall this would be if it were one line.
+     *
+     * It is what the caption is placed by, rather than its whole height, so
+     * that a second line - or a wider line gap - pushes downwards instead of
+     * sliding the first line up to keep the block centred. Where the top of
+     * the text is, is the thing somebody positioning a caption has in mind;
+     * how far below it the rest of it reaches is not. */
+    int anchorH = 0;
+
     TextStyle of;
     int forW = 0, forH = 0;
 

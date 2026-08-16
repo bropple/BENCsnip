@@ -280,6 +280,10 @@ struct App {
     bool selected(const ClipRef &r) const;
     void select(const ClipRef &r, bool add);
     void clearSel();
+
+    /* Every kind of selection there is, cleared together. See the note on the
+     * definition: there are three of them and Escape used to clear one. */
+    void deselectAll();
 };
 
 /* --- the panes --- */

@@ -677,10 +677,28 @@ static void test_render()
         CHECK(!lit3(320, 20), "and what was cropped away is not drawn");
     }
 
-    /* Past the end is black, and does not fail. */
-    r.videoAt(100.0, 64, 36, &f);
-    CHECK(f.valid(), "past the end still returns a frame");
-    CHECK(f.rgba[0] == 0 && f.rgba[1] == 0 && f.rgba[2] == 0, "and it is black");
+    /* Past the end holds the last frame rather than going black.
+     *
+     * A clip covers [pos, end), so at exactly `end` nothing covers anything -
+     * and that is where the playhead lands when playback stops and when End
+     * is pressed. Finishing a project made the picture vanish, which reads as
+     * the last clip having been lost. */
+    {
+        sn::VideoFrame last, past;
+        CHECK(r.videoAt(p.duration() - 0.05, 64, 36, &last), "a frame near the end");
+        CHECK(r.videoAt(p.duration(), 64, 36, &past), "and one at the very end");
+
+        long lit = 0;
+        for (size_t i = 0; i + 3 < past.rgba.size(); i += 4)
+            lit += past.rgba[i] + past.rgba[i + 1] + past.rgba[i + 2];
+        CHECK(lit > 0, "which is not black");
+
+        CHECK(r.videoAt(100.0, 64, 36, &past), "past the end still returns a frame");
+        lit = 0;
+        for (size_t i = 0; i + 3 < past.rgba.size(); i += 4)
+            lit += past.rgba[i] + past.rgba[i + 1] + past.rgba[i + 2];
+        CHECK(lit > 0, "and holds the last one however far past it is asked");
+    }
 
     /* --- the mirrors ---
      *

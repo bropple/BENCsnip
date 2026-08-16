@@ -77,7 +77,7 @@ middle piece and press **Shift+Delete**. Then **Ctrl+E**.
   side by side. There are presets for the layouts anyone actually wants. The
   canvas itself — size and frame rate — is a button in the toolbar, so a
   vertical or square project is two clicks. **?** in the toolbar lists every
-  control there is.
+  control there is, with a search box over it.
 * **Text on the picture.** Ctrl+T puts a caption at the playhead. Drag it
   about on the preview, drag a corner to resize it, and drag the handle above
   it to turn it — upright is sticky, and Shift steps by fifteen degrees. Fill
@@ -166,7 +166,7 @@ exactly what the preview showed you, because both go through the same code.
 | **Ctrl+N** | start again |
 | **Ctrl+A** | select everything |
 | **Ctrl+T** | put a caption at the playhead |
-| **Esc** | select nothing |
+| **Esc** | select nothing — clips, pictures and captions at once |
 | **F12** | write a screenshot beside the program |
 
 The mouse: click a clip to select it, drag the middle to move it, drag either

@@ -92,6 +92,21 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
 {
     if (w <= 0 || h <= 0) return false;
 
+    /* The end of the timeline holds its last frame rather than going black.
+     *
+     * A clip covers [pos, end), so at exactly `end` nothing covers anything
+     * and the canvas is the black it was cleared to. That is the moment the
+     * playhead lands on when playback stops and when End is pressed - so
+     * finishing a project made the picture vanish, which reads as the last
+     * clip having been lost rather than as the timeline having run out.
+     *
+     * Half a frame back is enough to be inside the last clip and too little
+     * to be a different picture. It is done here rather than in the preview
+     * so that the exporter's last frame is the same one: a render that ends
+     * on black would put that black in the file. */
+    const double dur = m_p ? m_p->duration() : 0.0;
+    if (dur > 0.0 && t >= dur) t = dur - 0.001;
+
     const size_t bytes = (size_t)w * h * 4;
     if (m_canvas.size() != bytes) m_canvas.assign(bytes, 0);
 

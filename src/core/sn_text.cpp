@@ -238,6 +238,71 @@ bool textMissingFont(const TextStyle &st)
     return fell;
 }
 
+/* --- how far every pixel is from the nearest bit of letter ---
+ *
+ * The outline used to be a dilation done the plain way: for each pixel, the
+ * most opaque thing within a disc of the outline's radius. That is correct
+ * and it is O(pixels x radius squared), and both of those grow with the size
+ * of the text - so the cost goes as the fourth power of it. Measured, on one
+ * word at 1920x1080: 11 ms at a size of 0.09, 551 ms at 0.25, 8.4 seconds at
+ * 0.5, and at 1.0 it did not finish. That is the "it gets stuck and becomes
+ * unmodifiable" this replaced: the caption was still being rasterised, once
+ * per frame, and nothing else got a turn.
+ *
+ * A distance transform is O(pixels) whatever the radius, so an outline is now
+ * free no matter how thick it is. This is Felzenszwalb and Huttenlocher's:
+ * the exact squared Euclidean distance, one pass down the rows and one down
+ * the columns, each an O(n) walk of the lower envelope of a set of parabolas.
+ */
+static void edt_1d(const float *f, float *d, int n, int *v, float *z)
+{
+    int k = 0;
+    v[0] = 0;
+    z[0] = -1e20f;
+    z[1] = 1e20f;
+
+    for (int q = 1; q < n; q++) {
+        float s;
+        for (;;) {
+            const int p = v[k];
+            s = ((f[q] + (float)q * q) - (f[p] + (float)p * p)) / (float)(2 * q - 2 * p);
+            if (s > z[k]) break;
+            k--;
+        }
+        k++;
+        v[k] = q;
+        z[k] = s;
+        z[k + 1] = 1e20f;
+    }
+
+    k = 0;
+    for (int q = 0; q < n; q++) {
+        while (z[k + 1] < (float)q) k++;
+        const float dx = (float)(q - v[k]);
+        d[q] = dx * dx + f[v[k]];
+    }
+}
+
+/* Squared distance from every pixel to the nearest one that is `inside`. */
+static void edt_2d(std::vector<float> &g, int w, int h)
+{
+    const int n = std::max(w, h);
+    std::vector<float> f((size_t)n), d((size_t)n), z((size_t)n + 1);
+    std::vector<int> v((size_t)n);
+
+    for (int x = 0; x < w; x++) {
+        for (int y = 0; y < h; y++) f[(size_t)y] = g[(size_t)y * w + x];
+        edt_1d(f.data(), d.data(), h, v.data(), z.data());
+        for (int y = 0; y < h; y++) g[(size_t)y * w + x] = d[(size_t)y];
+    }
+    for (int y = 0; y < h; y++) {
+        float *row = &g[(size_t)y * w];
+        for (int x = 0; x < w; x++) f[(size_t)x] = row[x];
+        edt_1d(f.data(), d.data(), w, v.data(), z.data());
+        for (int x = 0; x < w; x++) row[x] = d[(size_t)x];
+    }
+}
+
 /* ------------------------------------------------------------------ *
  * Building the layer
  * ------------------------------------------------------------------ */
@@ -327,40 +392,24 @@ bool buildTextLayer(const TextStyle &st, int w, int h, TextLayer *out)
 
     /* --- the outline ---
      *
-     * The coverage map grown by a disc of the outline's radius: for each
-     * pixel, the most opaque thing within reach. That is a dilation, and it is
-     * what an outline around a letter is - the letter, fattened, with the
-     * letter then drawn on top of it.
-     *
-     * Done the plain way, every pixel against every pixel of the disc, which
-     * is why buildTextLayer is the half a caller is expected to keep the
-     * result of. It runs when the caption changes, not when the frame does.
+     * Everything within the outline's radius of a letter, which is the same
+     * thing as everything whose distance to a letter is no more than that.
+     * The half pixel either side of the boundary is what keeps the edge from
+     * being a staircase: the glyphs are antialiased and an outline drawn round
+     * them with a hard edge looks worse than no outline at all.
      */
     std::vector<uint8_t> ring;
-    const int r = (int)std::ceil(outPx);
-    if (outPx > 0 && r > 0) {
+    if (outPx > 0.0) {
+        std::vector<float> dist((size_t)bw * bh);
+        for (size_t i = 0; i < dist.size(); i++) dist[i] = cov[i] >= 128 ? 0.0f : 1e20f;
+        edt_2d(dist, bw, bh);
+
         ring.assign((size_t)bw * bh, 0);
-
-        /* The offsets inside the disc, worked out once. */
-        std::vector<int> dxs, dys;
-        for (int dy = -r; dy <= r; dy++)
-            for (int dx = -r; dx <= r; dx++)
-                if ((double)dx * dx + (double)dy * dy <= outPx * outPx) {
-                    dxs.push_back(dx);
-                    dys.push_back(dy);
-                }
-
-        for (int y = 0; y < bh; y++) {
-            for (int x = 0; x < bw; x++) {
-                uint8_t best = 0;
-                for (size_t k = 0; k < dxs.size() && best < 255; k++) {
-                    const int sx = x + dxs[k], sy = y + dys[k];
-                    if (sx < 0 || sx >= bw || sy < 0 || sy >= bh) continue;
-                    const uint8_t v = cov[(size_t)sy * bw + sx];
-                    if (v > best) best = v;
-                }
-                ring[(size_t)y * bw + x] = best;
-            }
+        const float r = (float)outPx;
+        for (size_t i = 0; i < ring.size(); i++) {
+            const float d = std::sqrt(dist[i]);
+            const float t = r + 0.5f - d;
+            ring[i] = t <= 0.0f ? 0 : (t >= 1.0f ? 255 : (uint8_t)(t * 255.0f));
         }
     }
 
@@ -402,6 +451,7 @@ bool buildTextLayer(const TextStyle &st, int w, int h, TextLayer *out)
 
     out->w = bw;
     out->h = bh;
+    out->anchorH = (int)std::ceil(m.lineH) + 2 * pad;
     return true;
 }
 
@@ -414,11 +464,21 @@ namespace {
 /* Where the layer's centre sits on the canvas, and the rotation in radians.
  * The free space is split by x and y the way a track's picture is: 0 centres,
  * -1 is hard against the left or top, +1 against the right or bottom. */
-void placement(const TextStyle &st, int lw, int lh, int w, int h, double *cx, double *cy,
-               double *rad)
+void placement(const TextStyle &st, int lw, int lh, int anchorH, int w, int h,
+               double *cx, double *cy, double *rad)
 {
+    /* Across, the whole width is placed in the free space, which is what
+     * alignment is about and what somebody dragging it left and right means.
+     *
+     * Down, only the first line is. The top edge then sits where it would sit
+     * if the caption were one line, and everything after the first hangs
+     * below it - so adding a line, or opening up the line gap, pushes the
+     * rest down rather than sliding the first line up to keep the block
+     * centred on the same point. */
+    const int ah = anchorH > 0 ? anchorH : lh;
+
     *cx = (w - lw) * 0.5 * (1.0 + st.x) + lw * 0.5;
-    *cy = (h - lh) * 0.5 * (1.0 + st.y) + lh * 0.5;
+    *cy = (h - ah) * 0.5 * (1.0 + st.y) + lh * 0.5;
     *rad = st.rotation * 3.14159265358979323846 / 180.0;
 }
 
@@ -430,7 +490,7 @@ void blitTextLayer(const TextLayer &layer, const TextStyle &st, uint8_t *rgba, i
     if (!layer.valid() || !rgba || w <= 0 || h <= 0 || alpha <= 0.0) return;
 
     double cx, cy, rad;
-    placement(st, layer.w, layer.h, w, h, &cx, &cy, &rad);
+    placement(st, layer.w, layer.h, layer.anchorH, w, h, &cx, &cy, &rad);
 
     const double cs = std::cos(rad), sn_ = std::sin(rad);
     const int A = (int)std::lround(std::min(1.0, alpha) * 255.0);
@@ -517,9 +577,10 @@ bool textBox(const TextStyle &st, int w, int h, double corners[8])
     const int pad = (int)std::ceil(outPx) + 1;
     const double lw = std::ceil(m.w) + 2 * pad;
     const double lh = std::ceil(m.h) + 2 * pad;
+    const int ah = (int)std::ceil(m.lineH) + 2 * pad;
 
     double cx, cy, rad;
-    placement(st, (int)lw, (int)lh, w, h, &cx, &cy, &rad);
+    placement(st, (int)lw, (int)lh, ah, w, h, &cx, &cy, &rad);
 
     const double cs = std::cos(rad), si = std::sin(rad);
     const double hx = lw * 0.5, hy = lh * 0.5;

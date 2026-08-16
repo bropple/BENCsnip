@@ -129,6 +129,23 @@ void App::clearSel()
     sel.clear();
 }
 
+void App::deselectAll()
+{
+    /* Everything that can be selected, at once.
+     *
+     * There were three selections and Escape cleared one of them: clips.
+     * A picture stayed picked on the canvas and so did a caption, which is
+     * why clicking an empty part of the canvas appeared to do nothing to a
+     * caption - the click cleared the layer and left the caption exactly
+     * where it was. One function, and everywhere that means "nothing is
+     * selected now" calls it. */
+    sel.clear();
+    layoutTrack = -1;
+    textClip = ClipRef{};
+    fxSel = FxRef{};
+    fxSweepTrack = -1;
+}
+
 /* ------------------------------------------------------------------ *
  * Actions
  * ------------------------------------------------------------------ */
@@ -803,7 +820,11 @@ void previewPane(App &a, Rectangle r)
                 sel = &a.proj.tracks[hit];
                 a.dragMoved = false;
             } else {
-                a.layoutTrack = -1;
+                /* A click on nothing selects nothing. All of it: the caption
+                 * block above has already decided it was not a caption, and
+                 * this is the only place that knows it was not a picture
+                 * either. */
+                a.deselectAll();
                 sel = nullptr;
             }
         }
@@ -1187,7 +1208,7 @@ static void appmenu(App &a)
         case SN_CMD_DELETE:        doDelete(a, false); break;
         case SN_CMD_RIPPLE_DELETE: doDelete(a, true); break;
         case SN_CMD_SELECT_ALL:    cmd_select_all(a); break;
-        case SN_CMD_DESELECT:      a.clearSel(); break;
+        case SN_CMD_DESELECT:      a.deselectAll(); break;
 
         default: break;
         }
@@ -1441,11 +1462,7 @@ static void keys(App &a)
     /* F12 is not handled here on purpose: raylib takes the screenshot itself,
      * into screenshot000.png beside the program, and a second handler on the
      * same key writes a second copy of the same picture. */
-    if (IsKeyPressed(KEY_ESCAPE)) {
-        a.clearSel();
-        a.fxSel = App::FxRef{};
-        a.fxSweepTrack = -1;      /* the band means nothing once it is let go */
-    }
+    if (IsKeyPressed(KEY_ESCAPE)) a.deselectAll();
 
     if (IsKeyPressed(KEY_M)) {
         for (const ClipRef &r : a.sel)

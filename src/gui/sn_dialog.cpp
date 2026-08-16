@@ -840,6 +840,7 @@ const HelpRow HELP[] = {
     {"", "they slide out beside the picture rather than over it"},
     {"", "and close themselves five seconds after you leave"},
     {"the pin", "in a panel's header keeps it open for good"},
+    {"Esc", "select nothing - clips, pictures and captions all at once"},
     {"every slider", "has a box beside it - drag for roughly, type for exactly"},
     {"", nullptr},
 
@@ -861,6 +862,23 @@ const HelpRow HELP[] = {
 };
 
 float g_helpScroll = 0;
+std::string g_helpFind;
+
+/* Case-insensitive "does this row contain what was typed". */
+bool help_matches(const HelpRow &row, const std::string &needle)
+{
+    if (needle.empty()) return true;
+
+    std::string hay;
+    if (row.key) hay += row.key;
+    hay += ' ';
+    if (row.what) hay += row.what;
+    for (char &c : hay) c = (char)tolower((unsigned char)c);
+
+    std::string want = needle;
+    for (char &c : want) c = (char)tolower((unsigned char)c);
+    return hay.find(want) != std::string::npos;
+}
 
 } /* namespace */
 
@@ -869,12 +887,42 @@ void helpDialog(App &a)
     sn_ui &ui = a.ui;
 
     Rectangle r = modal_frame(a, "CONTROLS", 620, 560);
-    Rectangle body = {r.x + 10, r.y + 36, r.width - 20, r.height - 36 - 48};
+
+    /* A search box, because a table of eighty rows is a table somebody
+     * scrolls past the thing they were looking for. Typing narrows it to the
+     * rows that match, and the heading each surviving row sits under comes
+     * with it - a shortcut with no idea what part of the program it belongs
+     * to is half an answer. */
+    Rectangle find = {r.x + 10, r.y + 34, r.width - 20, 22};
+    sn_field(&ui, 8901, find, g_helpFind, "type to find a control");
+    ui.focus = 8901;
+
+    Rectangle body = {r.x + 10, find.y + find.height + 6, r.width - 20,
+                      r.height - (find.y + find.height + 6 - r.y) - 48};
     sn_panel(body, SN_WELL, SN_BORDER);
 
     const int n = (int)(sizeof HELP / sizeof HELP[0]);
     const float rowH = 15.0f;
-    const float want = n * rowH + 16;
+
+    /* Which rows survive the search, and which headings still have anything
+     * under them. Worked out first so the height is known before drawing. */
+    std::vector<char> show((size_t)n, 0);
+    int shown = 0;
+    for (int i = 0; i < n; i++) {
+        const HelpRow &row = HELP[i];
+        if (!row.key && row.what) continue;              /* a heading: later */
+        if (!row.key && !row.what) continue;
+        if (help_matches(row, g_helpFind)) { show[(size_t)i] = 1; shown++; }
+    }
+    for (int i = 0; i < n; i++) {
+        if (HELP[i].key || !HELP[i].what) continue;      /* only headings */
+        for (int j = i + 1; j < n && HELP[j].what != nullptr; j++)
+            if (show[(size_t)j]) { show[(size_t)i] = 1; break; }
+    }
+
+    float want = 16;
+    for (int i = 0; i < n; i++)
+        if (show[(size_t)i]) want += rowH;
 
     if (CheckCollisionPointRec(GetMousePosition(), body) && !sn_ui_blocked(&ui))
         g_helpScroll -= GetMouseWheelMove() * 40.0f;
@@ -883,28 +931,49 @@ void helpDialog(App &a)
     BeginScissorMode((int)body.x, (int)body.y, (int)body.width, (int)body.height);
     float ly = body.y + 8 - g_helpScroll;
     for (int i = 0; i < n; i++) {
+        if (!show[(size_t)i]) continue;
         const HelpRow &row = HELP[i];
 
         if (ly > body.y - rowH && ly < body.y + body.height) {
             if (!row.key) {
                 sn_text_spaced(&ui, SN_F_TINY, row.what, body.x + 8, ly, SN_ACCENT);
             } else if (row.what) {
+                /* A row that matched what was typed is lit, so that in a
+                 * section which survived because of one line, that line is
+                 * the one your eye lands on. */
+                const bool hit = !g_helpFind.empty() && help_matches(row, g_helpFind);
                 if (row.key[0])
-                    sn_text(&ui, SN_F_TINY, row.key, body.x + 14, ly, SN_TEXT);
+                    sn_text(&ui, SN_F_TINY, row.key, body.x + 14, ly,
+                            hit ? SN_ACCENT : SN_TEXT);
                 sn_text_clip(&ui, SN_F_TINY, row.what, body.x + 150, ly,
-                             body.width - 160, row.key[0] ? SN_DIM : SN_EDGE);
+                             body.width - 160,
+                             hit ? SN_TEXT : (row.key[0] ? SN_DIM : SN_EDGE));
             }
         }
-        ly += row.what || row.key ? rowH : rowH * 0.6f;
+        ly += rowH;
     }
     EndScissorMode();
 
-    sn_text(&ui, SN_F_TINY, "scroll for the rest", r.x + 12, r.y + r.height - 34,
-            SN_EDGE);
+    if (shown == 0)
+        sn_text(&ui, SN_F_TINY, "nothing here matches that", body.x + 10, body.y + 10,
+                SN_EDGE);
+
+    sn_text(&ui, SN_F_TINY,
+            g_helpFind.empty() ? "scroll for the rest" : "Esc clears the search",
+            r.x + 12, r.y + r.height - 34, SN_EDGE);
 
     Rectangle close = {r.x + r.width - 104, r.y + r.height - 40, 88, 26};
-    if (sn_button_lit(&ui, 8900, close, "DONE", 1) || IsKeyPressed(KEY_ESCAPE))
+    const bool done = sn_button_lit(&ui, 8900, close, "DONE", 1) != 0;
+
+    /* Escape empties the search first and closes the window second, which is
+     * the order somebody who has just searched for the wrong word wants. */
+    if (IsKeyPressed(KEY_ESCAPE) && !g_helpFind.empty()) {
+        g_helpFind.clear();
+        g_helpScroll = 0;
+    } else if (done || IsKeyPressed(KEY_ESCAPE)) {
         a.modal = MODAL_NONE;
+        ui.focus = 0;
+    }
 }
 
 /* ------------------------------------------------------------------ *
