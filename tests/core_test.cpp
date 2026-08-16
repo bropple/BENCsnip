@@ -1148,6 +1148,88 @@ static void test_project()
  * Export
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * A project file with rubbish in it
+ *
+ * Not because this program writes one - it cannot - but because a .bencsnip
+ * is a text file, and text files get hand-edited, truncated and produced by
+ * other things. "nan" is a spelling scanf accepts, and a NaN is worse than a
+ * wrong number: it is never less than anything and never greater than
+ * anything, so it walks through every clamp untouched.
+ * ------------------------------------------------------------------ */
+
+static void test_junk()
+{
+    printf("a file with rubbish in it\n");
+
+    const std::string path = "media/junk.bencsnip";
+    FILE *f = fopen(path.c_str(), "wb");
+    if (!f) { CHECK(false, "could not write %s", path.c_str()); return; }
+
+    fprintf(f, "bencsnip 1\n");
+    fprintf(f, "name junk\n");
+    fprintf(f, "video 1920 1080 nan\n");
+    fprintf(f, "next 50\n");
+    fprintf(f, "track 1 0 0 0 0 V1\n");
+    fprintf(f, "xform nan nan inf -inf nan 0.1 0.1 nan 0 0 0\n");
+    fprintf(f, "fxp nan nan 0\n");
+    fprintf(f, "fxp 1.0 inf 0\n");
+    fprintf(f, "clip 10 0 0 nan inf nan nan 0 0 0 nan\n");
+    fprintf(f, "track 2 2 0 0 0 T1\n");
+    fprintf(f, "clip 11 0 0 0 4 0 1 0 0 0 1\n");
+    fprintf(f, "tstyle nan nan inf nan 4294967295 255 nan 9 nan\n");
+    fprintf(f, "tstr hello\n");
+    fprintf(f, "track 3 1 0 0 0 A1\n");
+    fprintf(f, "level nan\n");
+    fclose(f);
+
+    sn::Project p;
+    std::string err;
+    CHECK(sn::loadProject(&p, path, &err), "it loads at all: %s", err.c_str());
+
+    CHECK(std::isfinite(p.fps) && p.fps > 0, "the frame rate is a number, got %f", p.fps);
+    CHECK(std::isfinite(p.duration()), "and so is the duration, got %f", p.duration());
+
+    for (const sn::Track &t : p.tracks) {
+        CHECK(std::isfinite(t.gain), "every track level is a number");
+        CHECK(std::isfinite(t.scaleX) && std::isfinite(t.scaleY), "every scale is");
+        CHECK(std::isfinite(t.x) && std::isfinite(t.y), "every position is");
+        CHECK(std::isfinite(t.cropL) && std::isfinite(t.cropR) &&
+                  std::isfinite(t.cropT) && std::isfinite(t.cropB),
+              "every crop is");
+
+        for (const sn::FxPoint &q : t.fx)
+            CHECK(std::isfinite(q.t) && std::isfinite(q.v) && q.v >= 0.0 && q.v <= 1.0,
+                  "every effect point is, and in range");
+
+        for (const sn::Clip &c : t.clips) {
+            CHECK(std::isfinite(c.in) && std::isfinite(c.out) && std::isfinite(c.pos),
+                  "every clip time is");
+            CHECK(std::isfinite(c.gain) && std::isfinite(c.repeat), "and its gain");
+            CHECK(std::isfinite(c.dur()) && c.dur() >= 0.0, "so its length is real");
+
+            const sn::TextStyle &st = c.text;
+            CHECK(std::isfinite(st.size) && st.size > 0, "a caption has a real size");
+            CHECK(std::isfinite(st.rotation), "and a real angle");
+            CHECK(std::isfinite(st.lineSpacing) && st.lineSpacing > 0, "and line gap");
+            CHECK(std::isfinite(st.outlineWidth), "and outline");
+            CHECK(st.align >= 0 && st.align <= 2, "and an alignment that exists, got %d",
+                  st.align);
+        }
+    }
+
+    /* And it can be drawn without any of that reaching the rasteriser. */
+    for (const sn::Track &t : p.tracks)
+        for (const sn::Clip &c : t.clips)
+            if (!c.text.text.empty()) {
+                std::vector<uint8_t> canvas((size_t)64 * 36 * 4, 0);
+                sn::drawText(c.text, canvas.data(), 64, 36);
+                CHECK(true, "and a caption from it draws without falling over");
+            }
+
+    remove(path.c_str());
+}
+
 static void test_export()
 {
     printf("export\n");
@@ -1575,6 +1657,7 @@ int main()
     test_text();
     test_loop();
     test_fx();
+    test_junk();
 
     if (have(V1) && have(V2) && have(A1)) {
         test_media();

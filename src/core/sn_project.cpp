@@ -5,6 +5,7 @@
 #include "sn_project.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <sstream>
@@ -228,6 +229,21 @@ bool saveProject(const Project &p, const std::string &path, std::string *err)
  * Load
  * ------------------------------------------------------------------ */
 
+/* A number read out of a file, made safe.
+ *
+ * Not because this program writes bad ones - it cannot any more - but because
+ * a project file is a text file, and text files get hand-edited, truncated,
+ * merged and produced by other things. "nan" and "inf" are both spellings
+ * scanf accepts, and a NaN is worse than a wrong number: it is never less
+ * than anything and never greater than anything, so it walks through every
+ * clamp in the program untouched and comes out the far end as a clip of no
+ * length or a caption of no size. */
+static double sane(double v, double lo, double hi, double fallback)
+{
+    if (!std::isfinite(v)) return fallback;
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
 bool loadProject(Project *out, const std::string &path, std::string *err)
 {
     FILE *f = fopen(path.c_str(), "rb");
@@ -269,6 +285,9 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
             p.name = line + 5;
         } else if (!strncmp(line, "video ", 6)) {
             sscanf(line + 6, "%d %d %lf", &p.width, &p.height, &p.fps);
+            p.fps = sane(p.fps, 1.0, 1000.0, 30.0);
+            if (p.width < 1 || p.width > 16384) p.width = 1920;
+            if (p.height < 1 || p.height > 16384) p.height = 1080;
         } else if (!strncmp(line, "next ", 5)) {
             p.nextId = atoi(line + 5);
         } else if (!strncmp(line, "item ", 5)) {
@@ -323,13 +342,23 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
             t.stretch = stretch != 0;
             t.flipH = fh != 0;
             t.flipV = fv != 0;
+
+            t.scaleX = sane(t.scaleX, 0.01, 8.0, 1.0);
+            t.scaleY = sane(t.scaleY, 0.01, 8.0, 1.0);
+            t.x = sane(t.x, -8.0, 8.0, 0.0);
+            t.y = sane(t.y, -8.0, 8.0, 0.0);
+            t.cropL = sane(t.cropL, 0.0, 0.95, 0.0);
+            t.cropR = sane(t.cropR, 0.0, 0.95, 0.0);
+            t.cropT = sane(t.cropT, 0.0, 0.95, 0.0);
+            t.cropB = sane(t.cropB, 0.0, 0.95, 0.0);
         } else if (!strncmp(line, "fxp ", 4)) {
             if (trackAt < 0) continue;
             FxPoint x;
             int hold = 0;
             if (sscanf(line + 4, "%lf %lf %d", &x.t, &x.v, &hold) < 2) continue;
             x.hold = hold != 0;
-            x.v = x.v < 0.0 ? 0.0 : (x.v > 1.0 ? 1.0 : x.v);
+            x.t = sane(x.t, 0.0, 1e6, 0.0);
+            x.v = sane(x.v, 0.0, 1.0, 1.0);
             p.tracks[trackAt].fx.push_back(x);
         } else if (!strncmp(line, "fx ", 3)) {
             /* A ramp, from the short-lived arrangement where the lane held
@@ -342,9 +371,11 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
             double from = 0, to = 0, va = 0, vb = 1;
             if (sscanf(line + 3, "%d %lf %lf %lf %lf", &kind, &from, &to, &va, &vb) < 5)
                 continue;
+            from = sane(from, 0.0, 1e6, 0.0);
+            to = sane(to, 0.0, 1e6, 0.0);
             if (to <= from) continue;
-            p.tracks[trackAt].fx.push_back(FxPoint{from, va, false});
-            p.tracks[trackAt].fx.push_back(FxPoint{to, vb, false});
+            p.tracks[trackAt].fx.push_back(FxPoint{from, sane(va, 0.0, 1.0, 0.0), false});
+            p.tracks[trackAt].fx.push_back(FxPoint{to, sane(vb, 0.0, 1.0, 1.0), false});
         } else if (!strncmp(line, "level ", 6)) {
             if (trackAt < 0) continue;
             double g = 1.0;
@@ -352,7 +383,7 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
              * asking for forty is a mix nobody can find the way back from,
              * and the renderer would clip it to a square wave anyway. */
             if (sscanf(line + 6, "%lf", &g) == 1)
-                p.tracks[trackAt].gain = g < 0.0 ? 0.0 : (g > 2.0 ? 2.0 : g);
+                p.tracks[trackAt].gain = sane(g, 0.0, 2.0, 1.0);
         } else if (!strncmp(line, "clip ", 5)) {
             if (trackAt < 0) continue;
             Clip c;
@@ -373,6 +404,11 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
              * different can be told why instead of leaving somebody to
              * wonder. */
             if (fadeIn > 0.0 || fadeOut > 0.0) droppedFades++;
+            c.in = sane(c.in, 0.0, 1e6, 0.0);
+            c.out = sane(c.out, 0.0, 1e6, 0.0);
+            c.pos = sane(c.pos, 0.0, 1e6, 0.0);
+            c.gain = sane(c.gain, 0.0, 2.0, 1.0);
+            c.repeat = sane(c.repeat, 0.0, 1e6, 1.0);
             if (!(c.repeat > 0)) c.repeat = 1.0;
             c.muted = muted != 0;
             if (c.dur() > 0) {
@@ -393,6 +429,14 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
                    &st.align, &st.lineSpacing);
             st.fill = (Rgba)fill;
             st.outline = (Rgba)outline;
+
+            st.size = sane(st.size, 0.001, 4.0, 0.09);
+            st.x = sane(st.x, -8.0, 8.0, 0.0);
+            st.y = sane(st.y, -8.0, 8.0, 0.0);
+            st.rotation = sane(st.rotation, -360.0, 360.0, 0.0);
+            st.outlineWidth = sane(st.outlineWidth, 0.0, 2.0, 0.0);
+            st.lineSpacing = sane(st.lineSpacing, 0.05, 10.0, 1.2);
+            if (st.align < 0 || st.align > 2) st.align = 1;
         } else if (!strncmp(line, "tfont ", 6)) {
             if (trackAt < 0 || clipAt < 0) continue;
             p.tracks[trackAt].clips[clipAt].text.font = line + 6;

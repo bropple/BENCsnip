@@ -936,6 +936,28 @@ namespace {
  * control and no way for two to be confused. */
 std::map<int, std::string> g_num;
 
+/* Everything in a number field that is not part of a number, removed as it is
+ * typed. Digits, one sign at the front, one dot anywhere.
+ *
+ * The value was already safe without this - a parse that fails leaves it
+ * alone - but "only numbers go in the box" is a better rule than "letters go
+ * in and are quietly ignored", because the second one looks like the field
+ * accepted something and then did nothing about it.
+ *
+ * No exponent. strtod would take "1e3", and nobody types that into a caption
+ * size; leaving 'e' out means the letters are simply all gone. */
+void keep_numeric(std::string &t)
+{
+    std::string out;
+    bool dot = false;
+    for (char ch : t) {
+        if (ch >= '0' && ch <= '9') out += ch;
+        else if ((ch == '-' || ch == '+') && out.empty()) out += ch;
+        else if (ch == '.' && !dot) { out += ch; dot = true; }
+    }
+    t.swap(out);
+}
+
 struct Lane {
     App *a;
     float x, w, y;
@@ -991,12 +1013,24 @@ struct Lane {
 
         Rectangle fld = {x + w - 60, y, 60, 20};
         if (sn_field(&a->ui, id, fld, text, "")) {
+            const size_t was = text.size();
+            keep_numeric(text);
+            if (text.size() != was && a->ui.caret > (int)text.size())
+                a->ui.caret = a->ui.anchor = (int)text.size();
+
             /* Anything that is not a number leaves the value alone: somebody
-             * halfway through typing "-" or "0." has not asked for zero. */
+             * halfway through typing "-" or "0." has not asked for zero.
+             *
+             * And the result has to be a real number. strtod takes "nan",
+             * and a NaN survives being clamped - both `got < lo` and
+             * `got > hi` are false for it - so without this check it would
+             * go straight into a caption's size, out to the renderer, and
+             * into the project file, where it would still be a NaN the next
+             * time the file was opened. */
             const char *p = text.c_str();
             char *end = nullptr;
             const double got = strtod(p, &end);
-            if (end && end != p) {
+            if (end && end != p && std::isfinite(got)) {
                 *v = got < lo ? lo : (got > hi ? hi : got);
                 moved = true;
             }
