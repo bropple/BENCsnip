@@ -47,6 +47,16 @@ Color SN_CLIP_A_EDGE = {0x3f, 0x5c, 0x28, 255};
  * what a text clip is has to be readable at a glance across a timeline, and
  * amber is the one colour in this theme not already spoken for by video or
  * audio. */
+/* A locked track. Grey rather than dark, because "you cannot move this" is
+ * not the same statement as "this is off" - a muted track is hatched and
+ * still its own colour, and a locked one should read as set rather than as
+ * disabled. The kind's colour survives on the name badge in the head, which
+ * is the one place it is still needed: what a track *is* does not stop being
+ * true when it is locked. */
+Color SN_CLIP_LK = {0x3c, 0x40, 0x38, 255};
+Color SN_CLIP_LK_HI = {0x52, 0x57, 0x4c, 255};
+Color SN_CLIP_LK_EDGE = {0x2b, 0x2f, 0x28, 255};
+
 Color SN_CLIP_T = {0x8c, 0x5c, 0x22, 255};
 Color SN_CLIP_T_HI = {0xbf, 0x86, 0x35, 255};
 Color SN_CLIP_T_EDGE = {0x75, 0x4b, 0x1c, 255};

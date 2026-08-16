@@ -157,7 +157,8 @@ static double snap_time(App &a, double t, const ClipRef *ignore)
  * Drawing one clip
  * ------------------------------------------------------------------ */
 
-static void draw_clip(App &a, int idx, const Clip &c, TrackKind kind, bool hot)
+static void draw_clip(App &a, int idx, const Clip &c, TrackKind kind, bool hot,
+                      bool locked)
 {
     sn_ui &ui = a.ui;
     Rectangle r = clip_rect(a, idx, c);
@@ -170,10 +171,18 @@ static void draw_clip(App &a, int idx, const Clip &c, TrackKind kind, bool hot)
     const bool video = kind == TRACK_VIDEO;
     const bool text = kind == TRACK_TEXT;
 
-    const Color body = text  ? (isSel ? SN_CLIP_T_HI : SN_CLIP_T)
-                      : video ? (isSel ? SN_CLIP_V_HI : SN_CLIP_V)
-                              : (isSel ? SN_CLIP_A_HI : SN_CLIP_A);
-    const Color edge = text ? SN_CLIP_T_EDGE : video ? SN_CLIP_V_EDGE : SN_CLIP_A_EDGE;
+    /* A locked track is grey. Its kind is still readable from the badge in
+     * its head, which keeps its colour - what a track is does not stop being
+     * true when it is locked - and the grey says the thing that has changed,
+     * which is that none of this will move. */
+    const Color body = locked ? (isSel ? SN_CLIP_LK_HI : SN_CLIP_LK)
+                       : text  ? (isSel ? SN_CLIP_T_HI : SN_CLIP_T)
+                       : video ? (isSel ? SN_CLIP_V_HI : SN_CLIP_V)
+                               : (isSel ? SN_CLIP_A_HI : SN_CLIP_A);
+    const Color edge = locked ? SN_CLIP_LK_EDGE
+                       : text ? SN_CLIP_T_EDGE
+                       : video ? SN_CLIP_V_EDGE
+                               : SN_CLIP_A_EDGE;
 
     BeginScissorMode((int)lane.x, (int)lane.y, (int)lane.width, (int)lane.height);
 
@@ -197,7 +206,8 @@ static void draw_clip(App &a, int idx, const Clip &c, TrackKind kind, bool hot)
             if (tw < r.width - 4) {
                 DrawTexturePro(tx, Rectangle{0, 0, (float)tx.width, (float)tx.height},
                                Rectangle{r.x + 2, r.y + 2, tw, th}, Vector2{0, 0}, 0,
-                               Color{255, 255, 255, 90});
+                               locked ? Color{150, 155, 145, 55}
+                                      : Color{255, 255, 255, 90});
             }
         }
     }
@@ -608,8 +618,22 @@ static void draw_heads(App &a)
             }
         }
 
-        sn_text_spaced(&ui, SN_F_SMALL, t.name.c_str(), h.x + 8, h.y + 5,
-                       t.muted ? SN_EDGE : SN_TEXT);
+        /* The name on a badge in its kind's colour: blue for a picture, green
+         * for sound, amber for a caption. It keeps that colour whatever else
+         * is true of the track - locked, muted, hidden - because it is the
+         * one thing on the head that says what the track *is*, and that does
+         * not change. */
+        {
+            const Color kindCol = t.kind == TRACK_VIDEO  ? SN_CLIP_V
+                                  : t.kind == TRACK_AUDIO ? SN_CLIP_A
+                                                          : SN_CLIP_T;
+            const float nw = sn_measure(&ui, SN_F_SMALL, t.name.c_str(), 1.0f);
+            Rectangle badge = {h.x + 6, h.y + 4, std::max(28.0f, nw + 12), 16};
+            DrawRectangleRec(badge, kindCol);
+            DrawRectangleLinesEx(badge, 1, Fade(SN_BG, 0.45f));
+            sn_text_spaced(&ui, SN_F_SMALL, t.name.c_str(), badge.x + 6, badge.y + 2,
+                           SN_TEXT);
+        }
 
         /* A track doing something to its picture says so, because four
          * numbers in a dialog are easy to forget having set. */
@@ -862,9 +886,11 @@ void timelinePane(App &a, Rectangle r)
     for (size_t i = 0; i < a.proj.tracks.size(); i++) {
         Rectangle l = lane_rect(a, (int)i);
         if (l.y > r.y + r.height) break;
-        DrawRectangleRec(l, visualTrack(a.proj.tracks[i].kind)
-                                ? Color{0x0e, 0x14, 0x0c, 255}
-                                : Color{0x0c, 0x12, 0x0a, 255});
+        DrawRectangleRec(l, a.proj.tracks[i].locked
+                                ? Color{0x14, 0x15, 0x13, 255}
+                                : visualTrack(a.proj.tracks[i].kind)
+                                      ? Color{0x0e, 0x14, 0x0c, 255}
+                                      : Color{0x0c, 0x12, 0x0a, 255});
         if (a.proj.tracks[i].locked)
             for (float x = l.x; x < l.x + l.width; x += 10)
                 DrawLineEx(Vector2{x, l.y}, Vector2{x + l.height, l.y + l.height}, 1,
@@ -980,7 +1006,7 @@ void timelinePane(App &a, Rectangle r)
         if (lane_rect(a, (int)i).y > r.y + r.height) break;
         for (const Clip &c : t.clips)
             draw_clip(a, (int)i, c, t.kind,
-                      overClip.track == (int)i && overClip.clip == c.id);
+                      overClip.track == (int)i && overClip.clip == c.id, t.locked);
         draw_fx(a, (int)i);
     }
     EndScissorMode();
@@ -1048,6 +1074,32 @@ void timelinePane(App &a, Rectangle r)
         } else if (overClip.ok() && !a.proj.tracks[overClip.track].locked) {
             const Clip *c = a.proj.clip(overClip);
             a.select(overClip, IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT));
+
+            /* Picking a clip is picking the thing it is part of, so the panel
+             * follows: a video clip means that track's picture, a caption
+             * means that caption. It is the same act as clicking the track's
+             * head or its picture on the preview, and all three should land
+             * in the same place.
+             *
+             * Audio has nothing to show, and the panel is left alone rather
+             * than opened on something else - a panel that changed subject
+             * every time a clip was selected would be a panel nobody could
+             * keep pointed at anything. */
+            const TrackKind pk = a.proj.tracks[overClip.track].kind;
+            if (pk == TRACK_VIDEO) {
+                a.layoutTrack = overClip.track;
+                a.inspectPage = App::INSPECT_LAYOUT;
+                a.inspectScroll = 0.0f;
+                a.inspect.open = true;
+                a.inspect.touched = GetTime();
+            } else if (pk == TRACK_TEXT) {
+                a.layoutTrack = -1;
+                a.textClip = overClip;
+                a.inspectPage = App::INSPECT_TEXT;
+                a.inspectScroll = 0.0f;
+                a.inspect.open = true;
+                a.inspect.touched = GetTime();
+            }
             a.drag = overWhat;
             a.dragClip = overClip;
             a.dragFrom = m;

@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <string>
@@ -678,6 +679,16 @@ bool hex_to(const std::string &in, Rgba *c)
  */
 std::map<int, std::string> g_hex;
 
+/* One colour, in two lines, because one line does not fit.
+ *
+ *   FILL     [swatch] [ 296600      ]
+ *            [ PICK ]  A [------] 100%
+ *
+ * It was one line, laid out for a dialog five hundred and eighty pixels wide.
+ * In a three hundred pixel column the picker button and the alpha slider ran
+ * off the right-hand edge and the panel looked like it had been squashed -
+ * which it had. Two lines is what the width allows, and the button goes on
+ * the second because it is the one thing here that opens something else. */
 bool colour_row(App &a, int id, const char *name, Rgba *c, float x, float y, float w)
 {
     sn_ui &ui = a.ui;
@@ -690,7 +701,7 @@ bool colour_row(App &a, int id, const char *name, Rgba *c, float x, float y, flo
 
     /* The swatch, over a chequer so an alpha of nothing looks like nothing
      * rather than like black. */
-    Rectangle sw = {x + 98, y, 30, 22};
+    Rectangle sw = {x + 72, y, 30, 21};
     for (int gy = 0; gy < 3; gy++)
         for (int gx = 0; gx < 4; gx++)
             DrawRectangle((int)sw.x + gx * 8, (int)sw.y + gy * 8, 8, 8,
@@ -706,13 +717,16 @@ bool colour_row(App &a, int id, const char *name, Rgba *c, float x, float y, flo
         text = now;
     }
 
-    Rectangle hf = {x + 134, y, 96, 22};
+    Rectangle hf = {x + 108, y, w - 108, 21};
     if (sn_field(&ui, id, hf, text, "RRGGBB")) {
         Rgba n = *c;
         if (hex_to(text, &n) && n != *c) { *c = n; changed = true; }
     }
 
-    Rectangle pick = {x + 238, y, 74, 22};
+    /* --- the second line --- */
+    const float y2 = y + 25;
+
+    Rectangle pick = {x + 72, y2, 58, 20};
     if (sn_button(&ui, id + 1, pick, "PICK", 1)) {
         unsigned v = (unsigned)*c;
         const int rc = sn_color_dialog(GetWindowHandle(), name, &v);
@@ -724,8 +738,8 @@ bool colour_row(App &a, int id, const char *name, Rgba *c, float x, float y, flo
         }
     }
 
-    label(a, "ALPHA", x + 326, y + 4);
-    Rectangle as = {x + 386, y + 4, w - 386 - 52, 14};
+    sn_text(&ui, SN_F_TINY, "A", x + 138, y2 + 4, SN_DIM);
+    Rectangle as = {x + 150, y2 + 4, w - 150 - 34, 13};
     float av = al / 255.0f;
     if (sn_slider(&ui, id + 2, as, &av)) {
         *c = (*c & 0xffffff00u) | (Rgba)(unsigned)(av * 255.0f + 0.5f);
@@ -734,15 +748,15 @@ bool colour_row(App &a, int id, const char *name, Rgba *c, float x, float y, flo
     {
         char n[16];
         snprintf(n, sizeof n, "%d%%", (int)(al * 100 / 255));
-        sn_text(&ui, SN_F_TINY, n, as.x + as.width + 8, y + 4, SN_EDGE);
+        sn_text(&ui, SN_F_TINY, n, as.x + as.width + 6, y2 + 4, SN_EDGE);
     }
 
     return changed;
 }
 
-/* The font list, filtered. Kept between frames because it is the dialog's
- * own state and not the project's - closing the window forgets it, which is
- * what you want from a search box. */
+/* The font list's search box and where it is scrolled to. The panel's own
+ * state rather than the project's - closing it forgets both, which is what
+ * you want from a search box. */
 std::string g_fontFilter;
 float g_fontScroll = 0;
 
@@ -805,7 +819,7 @@ const HelpRow HELP[] = {
     {"", nullptr},
 
     {nullptr, "THE TIMELINE, WITH THE MOUSE"},
-    {"click a clip", "select it; Shift adds to the selection"},
+    {"click a clip", "select it, and show its track in the panel"},
     {"drag its middle", "move it, to another track if you like"},
     {"drag an edge", "trim it - past the end of the source to loop it"},
     {"the ruler", "scrub. It is the only thing that moves the playhead"},
@@ -826,6 +840,7 @@ const HelpRow HELP[] = {
     {"", "they slide out beside the picture rather than over it"},
     {"", "and close themselves five seconds after you leave"},
     {"the pin", "in a panel's header keeps it open for good"},
+    {"every slider", "has a box beside it - drag for roughly, type for exactly"},
     {"", nullptr},
 
     {nullptr, "THE PREVIEW"},
@@ -916,6 +931,11 @@ namespace {
 /* The vertical cursor a panel body is laid out with. Everything here is
  * "put the next thing under the last thing", which is the whole reason a
  * column can hold controls a dialog had to arrange by hand. */
+/* What each number field has in it while it is being typed into. Keyed by
+ * the same id the slider and the field share, so there is one of these per
+ * control and no way for two to be confused. */
+std::map<int, std::string> g_num;
+
 struct Lane {
     App *a;
     float x, w, y;
@@ -940,20 +960,49 @@ struct Lane {
         y += 13;
     }
 
-    /* A slider with its name above it and its value beside it. */
+    /* A slider with its name above it and its value beside it, and the value
+     * is a field you can type into.
+     *
+     * A slider is quick and cannot be exact: it is one pixel to about a
+     * hundredth of the range, and "0.12" is not a thing a hand lands on. Both,
+     * then - drag for roughly, type for exactly - and the field is the same
+     * width as the number it holds so it does not look like somewhere to
+     * write an essay.
+     *
+     * While the caret is in it the text is whatever is being typed, and it
+     * goes back to the value the moment it is not. Otherwise "0.1" on the way
+     * to "0.15" would be rewritten as "0.10" and the next keystroke would
+     * make it "0.101".
+     */
     bool number(int id, const char *name, double *v, double lo, double hi,
                 const char *fmt)
     {
         label(name);
-        Rectangle sl = {x, y, w - 62, 14};
+
+        Rectangle sl = {x, y + 3, w - 66, 14};
         float t = (float)((*v - lo) / (hi - lo));
-        const bool moved = sn_slider(&a->ui, id, sl, &t) != 0;
+        bool moved = sn_slider(&a->ui, id, sl, &t) != 0;
         if (moved) *v = lo + t * (hi - lo);
 
-        char num[48];
-        snprintf(num, sizeof num, fmt, *v);
-        sn_text(&a->ui, SN_F_TINY, num, sl.x + sl.width + 8, y + 1, SN_TEXT);
-        y += 20;
+        std::string &text = g_num[id];
+        char now[48];
+        snprintf(now, sizeof now, fmt, *v);
+        if (a->ui.focus != id || moved) text = now;
+
+        Rectangle fld = {x + w - 60, y, 60, 20};
+        if (sn_field(&a->ui, id, fld, text, "")) {
+            /* Anything that is not a number leaves the value alone: somebody
+             * halfway through typing "-" or "0." has not asked for zero. */
+            const char *p = text.c_str();
+            char *end = nullptr;
+            const double got = strtod(p, &end);
+            if (end && end != p) {
+                *v = got < lo ? lo : (got > hi ? hi : got);
+                moved = true;
+            }
+        }
+
+        y += 24;
         return moved;
     }
 };
@@ -990,20 +1039,20 @@ static void inspect_layout(App &a, Lane &L)
     L.y += 30;
 
     if (!t->stretch) {
-        if (L.number(8720, "SIZE", &t->scaleX, 0.05, 2.0, "%.2f")) {
+        if (L.number(8720, "SIZE", &t->scaleX, 0.02, 4.0, "%.2f")) {
             t->scaleY = t->scaleX;
             a.changed(true);
         }
         L.note("1 fills the canvas");
     } else {
-        if (L.number(8721, "WIDTH", &t->scaleX, 0.05, 2.0, "%.2f")) a.changed(true);
-        if (L.number(8722, "HEIGHT", &t->scaleY, 0.05, 2.0, "%.2f")) a.changed(true);
+        if (L.number(8721, "WIDTH", &t->scaleX, 0.02, 4.0, "%.2f")) a.changed(true);
+        if (L.number(8722, "HEIGHT", &t->scaleY, 0.02, 4.0, "%.2f")) a.changed(true);
     }
     L.gap(4);
 
-    if (L.number(8723, "LEFT / RIGHT", &t->x, -1.0, 1.0, "%+.2f")) a.changed(true);
+    if (L.number(8723, "LEFT / RIGHT", &t->x, -2.0, 2.0, "%+.2f")) a.changed(true);
     L.note("-1 left edge, +1 right edge");
-    if (L.number(8724, "UP / DOWN", &t->y, -1.0, 1.0, "%+.2f")) a.changed(true);
+    if (L.number(8724, "UP / DOWN", &t->y, -2.0, 2.0, "%+.2f")) a.changed(true);
     L.note("-1 top, +1 bottom");
     L.gap(6);
 
@@ -1108,14 +1157,8 @@ static void inspect_text(App &a, Lane &L)
             nameCol = SN_AMBER;
             shown += " - not on this machine";
         }
-        sn_text_clip(&a.ui, SN_F_TINY, shown.c_str(), L.x, L.y, L.w - 72, nameCol);
-
-        Rectangle emb = {L.x + L.w - 68, L.y - 4, 68, 20};
-        if (sn_button(&a.ui, 8810, emb, "BUILT IN", !st.font.empty())) {
-            st.font.clear();
-            a.changed();
-        }
-        L.y += 20;
+        sn_text_clip(&a.ui, SN_F_TINY, shown.c_str(), L.x, L.y, L.w, nameCol);
+        L.y += 16;
 
         Rectangle filter = {L.x, L.y, L.w, 21};
         sn_field(&a.ui, 8811, filter, g_fontFilter, "type to find a font");
@@ -1161,18 +1204,25 @@ static void inspect_text(App &a, Lane &L)
         L.y += list.height + 6;
 
         char n[48];
-        snprintf(n, sizeof n, "%d of %d fonts", (int)hit.size(), (int)fonts.size());
-        L.note(n);
+        snprintf(n, sizeof n, "%d of %d", (int)hit.size(), (int)fonts.size());
+        sn_text(&a.ui, SN_F_TINY, n, L.x, L.y + 4, SN_EDGE);
+
+        Rectangle emb = {L.x + L.w - 74, L.y, 74, 20};
+        if (sn_button(&a.ui, 8810, emb, "BUILT IN", !st.font.empty())) {
+            st.font.clear();
+            a.changed();
+        }
+        L.y += 24;
     }
     L.gap(4);
 
-    if (L.number(8820, "SIZE", &st.size, 0.01, 0.60, "%.3f")) a.changed(true);
+    if (L.number(8820, "SIZE", &st.size, 0.005, 2.0, "%.3f")) a.changed(true);
     if (L.number(8821, "TURN", &st.rotation, -180.0, 180.0, "%.0f")) {
         if (std::fabs(st.rotation) < 2.0) st.rotation = 0.0;
         a.changed(true);
     }
-    if (L.number(8822, "OUTLINE", &st.outlineWidth, 0.0, 0.35, "%.3f")) a.changed(true);
-    if (L.number(8823, "LINE GAP", &st.lineSpacing, 0.8, 2.5, "%.2f")) a.changed(true);
+    if (L.number(8822, "OUTLINE", &st.outlineWidth, 0.0, 1.0, "%.3f")) a.changed(true);
+    if (L.number(8823, "LINE GAP", &st.lineSpacing, 0.2, 6.0, "%.2f")) a.changed(true);
     L.gap(4);
 
     L.label("ALIGN");
@@ -1190,9 +1240,9 @@ static void inspect_text(App &a, Lane &L)
     }
 
     if (colour_row(a, 8840, "FILL", &st.fill, L.x, L.y, L.w)) a.changed(true);
-    L.y += 46;
+    L.y += 52;
     if (colour_row(a, 8850, "OUTLINE", &st.outline, L.x, L.y, L.w)) a.changed(true);
-    L.y += 46;
+    L.y += 52;
 }
 
 void inspectPane(App &a, Rectangle r)

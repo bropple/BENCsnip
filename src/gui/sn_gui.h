@@ -45,6 +45,7 @@ extern Color SN_TIP;
 extern Color SN_CLIP_V, SN_CLIP_V_HI, SN_CLIP_V_EDGE;
 extern Color SN_CLIP_A, SN_CLIP_A_HI, SN_CLIP_A_EDGE;
 extern Color SN_CLIP_T, SN_CLIP_T_HI, SN_CLIP_T_EDGE;
+extern Color SN_CLIP_LK, SN_CLIP_LK_HI, SN_CLIP_LK_EDGE;
 
 #define SN_RADIUS 3
 #define SN_PAD    8

@@ -69,7 +69,8 @@ middle piece and press **Shift+Delete**. Then **Ctrl+E**.
   picture rather than over it, and close themselves five seconds after you
   leave — or stay for good if you pin them. Everything about a video layer or
   a caption is in the right-hand one, adjustable while the thing you are
-  adjusting is on screen and the transport still works.
+  adjusting is on screen and the transport still works. Every slider has a box
+  beside it: drag for roughly, type for exactly.
 * **A layout per video track.** Click a track's head — or its picture on the
   preview — and the right-hand panel is about it. Size, position, crop and
   mirrors, relative to the canvas, so a small video can play in the corner of a big one or two can sit
