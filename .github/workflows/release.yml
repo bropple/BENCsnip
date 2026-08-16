@@ -370,6 +370,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+          # The tag object itself, for its annotation - see "What is new"
+          # below. A shallow checkout of the commit does not carry it.
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v8
         with: { path: dl }
@@ -458,6 +461,58 @@ jobs:
           ls -l
           cat SHA256SUMS
 
+      # What is new goes in the tag's own annotation, so that the thing
+      # somebody writes when they cut a release is the thing the release page
+      # shows. Missing or unreadable is not a failure: the rest of the page
+      # says what the download is, and a release with no summary beats no
+      # release at all.
+      - name: What is new
+        run: |
+          : > NOTES.md
+          if BODY="$(git tag -l --format='%(contents:body)' "$VERSION" 2>/dev/null)"; then
+            if [ -n "$BODY" ]; then
+              printf '%s\n\n---\n\n' "$BODY" > NOTES.md
+            fi
+          fi
+          cat >> NOTES.md <<'TEMPLATE'
+          A video editor for the jobs that should take a minute.
+
+          **Download the one for your machine, unpack it, run it.** Nothing to
+          install: each binary carries its own ffmpeg, its own raylib, its own
+          font. Linux and macOS builds are tarred rather than zipped because a
+          GitHub zip does not carry the executable bit.
+
+          | file | for |
+          |---|---|
+          | `*-windows-setup.exe` | Windows 10 and later — installer |
+          | `*-windows-x86_64.zip` | Windows, portable: unzip and run |
+          | `*-macos-arm64.dmg` | macOS, Apple silicon — drag to Applications |
+          | `*-linux-x86_64.tar.gz` | Linux, Intel/AMD |
+          | `*-linux-arm64.tar.gz` | Linux, ARM (Raspberry Pi 5, Ampere) |
+
+          The installer replaces an existing BENCsnip rather than sitting
+          beside it, and offers to open `.bencsnip` projects on
+          double-click. It leaves video and audio files alone.
+
+          The macOS app is signed ad-hoc, which is not a signature anyone
+          can trust — it just makes the bundle valid rather than "damaged".
+          The first launch still needs right-click → Open, or
+          `xattr -dr com.apple.quarantine /Applications/BENCsnip.app`.
+
+          No Intel macOS build: Apple stopped selling those, and the runner
+          for them is retired.
+
+          **Licence.** BENCsnip itself is MIT. These binaries statically link
+          FFmpeg built with libx264, which is GPL, so **the binaries are under
+          the GPL as a whole**. Each archive carries `BINARY-LICENCE.txt` and
+          the exact FFmpeg configure line used to build it. Source: this
+          repository, plus FFmpeg and x264 at the versions named in that file.
+
+          `SHA256SUMS` covers every archive here.
+          TEMPLATE
+          echo "--- release notes ---"
+          cat NOTES.md
+
       - name: Release
         uses: softprops/action-gh-release@v3
         with:
@@ -465,38 +520,4 @@ jobs:
           name: BENCsnip ${{ env.VERSION }}
           files: dist/*
           fail_on_unmatched_files: true
-          body: |
-            A video editor for the jobs that should take a minute.
-
-            **Download the one for your machine, unpack it, run it.** Nothing to
-            install: each binary carries its own ffmpeg, its own raylib, its own
-            font. Linux and macOS builds are tarred rather than zipped because a
-            GitHub zip does not carry the executable bit.
-
-            | file | for |
-            |---|---|
-            | `*-windows-setup.exe` | Windows 10 and later — installer |
-            | `*-windows-x86_64.zip` | Windows, portable: unzip and run |
-            | `*-macos-arm64.dmg` | macOS, Apple silicon — drag to Applications |
-            | `*-linux-x86_64.tar.gz` | Linux, Intel/AMD |
-            | `*-linux-arm64.tar.gz` | Linux, ARM (Raspberry Pi 5, Ampere) |
-
-            The installer replaces an existing BENCsnip rather than sitting
-            beside it, and offers to open `.bencsnip` projects on
-            double-click. It leaves video and audio files alone.
-
-            The macOS app is signed ad-hoc, which is not a signature anyone
-            can trust — it just makes the bundle valid rather than "damaged".
-            The first launch still needs right-click → Open, or
-            `xattr -dr com.apple.quarantine /Applications/BENCsnip.app`.
-
-            No Intel macOS build: Apple stopped selling those, and the runner
-            for them is retired.
-
-            **Licence.** BENCsnip itself is MIT. These binaries statically link
-            FFmpeg built with libx264, which is GPL, so **the binaries are under
-            the GPL as a whole**. Each archive carries `BINARY-LICENCE.txt` and
-            the exact FFmpeg configure line used to build it. Source: this
-            repository, plus FFmpeg and x264 at the versions named in that file.
-
-            `SHA256SUMS` covers every archive here.
+          body_path: NOTES.md
