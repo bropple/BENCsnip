@@ -69,7 +69,13 @@ int importFile(Project &p, const std::string &path, std::string *err)
     if (firstVideo) {
         p.width = mi.dispW();
         p.height = mi.dispH();
-        if (mi.fps > 0) p.fps = mi.fps;
+
+        /* Its size, but not its frame rate if it is a photograph. A still has
+         * no rate of its own; what libav reports for one is whatever the
+         * image demuxer defaults to - 25 for a png - and a project set to 25
+         * because somebody imported a title card first is a project that
+         * quietly resamples every video that follows. */
+        if (mi.fps > 0 && !mi.still) p.fps = mi.fps;
     }
 
     p.dirty = true;

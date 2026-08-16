@@ -79,6 +79,20 @@ static Rectangle clip_rect(const App &a, int idx, const Clip &c)
     return Rectangle{x0, l.y + 2, std::max(2.0f, x1 - x0), l.height - 4};
 }
 
+/* The same clip for the purpose of being clicked on, which is the whole lane
+ * height rather than the drawn rectangle.
+ *
+ * A clip is drawn two pixels inside its lane, so a click in that two pixel
+ * band was a click on no clip at all - and a click on no clip moves the
+ * playhead. The band runs directly above the clip, which is exactly where the
+ * fade grips are, so aiming at a fade and missing high scrubbed instead. */
+static Rectangle clip_hit_rect(const App &a, int idx, const Clip &c)
+{
+    Rectangle r = clip_rect(a, idx, c);
+    Rectangle l = lane_rect(a, idx);
+    return Rectangle{r.x, l.y, r.width, l.height};
+}
+
 /* Which track lane a y falls in, or -1. */
 static int track_at(const App &a, float y)
 {
@@ -676,8 +690,8 @@ void timelinePane(App &a, Rectangle r)
     if (overTrack >= 0) {
         const Track &t = a.proj.tracks[overTrack];
         for (const Clip &c : t.clips) {
+            if (!CheckCollisionPointRec(m, clip_hit_rect(a, overTrack, c))) continue;
             Rectangle cr = clip_rect(a, overTrack, c);
-            if (!CheckCollisionPointRec(m, cr)) continue;
 
             overClip = ClipRef{overTrack, c.id};
 

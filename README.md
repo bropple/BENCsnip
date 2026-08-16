@@ -129,6 +129,9 @@ exactly what the preview showed you, because both go through the same code.
 | **, .** | to the previous / next cut |
 | **Home / End** | to the beginning / the end |
 | **F** | fit the whole timeline in the window |
+| **R** | turn the selected caption 15°; Shift+R the other way |
+| **C** | size, position and crop for the selected picture |
+| **Tab** | the next layer under the pointer, when several overlap |
 | **+ −** | zoom in / out |
 | **Ctrl+Z / Ctrl+Shift+Z** | undo / redo |
 | **Ctrl+I** | add media to the bin |

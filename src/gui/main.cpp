@@ -424,17 +424,71 @@ void previewPane(App &a, Rectangle r)
                 break;
             }
 
-            /* Front to back, so a click picks what can be seen. */
-            ClipRef capHit;
-            for (int i = (int)a.proj.tracks.size() - 1; i >= 0 && !capHit.ok(); i--) {
-                const Track &t0 = a.proj.tracks[i];
-                if (t0.kind != TRACK_TEXT || t0.muted || t0.locked) continue;
-                const Clip *c0 = t0.at(a.playhead);
-                if (!c0 || c0->text.text.empty()) continue;
+            /* --- everything under the pointer, front to back ---
+             *
+             * Front to back because a click picks what can be seen, and the
+             * list is stored back-first. Captions and pictures go in the same
+             * list, in the one order the compositor uses, so that Tab can walk
+             * through the lot: a caption over a video layer over another video
+             * layer is three things at the same point on screen, and only the
+             * front one is reachable with the mouse alone.
+             */
+            struct Pick {
+                bool text;
+                int track;
+                int clip;      /* text only */
+            };
+            std::vector<Pick> under;
 
-                Vector2 q[4];
-                if (capQuad(c0->text, q) && inQuad(m, q))
-                    capHit = ClipRef{i, c0->id};
+            for (int i = (int)a.proj.tracks.size() - 1; i >= 0; i--) {
+                const Track &t0 = a.proj.tracks[i];
+                if (t0.muted || t0.locked) continue;
+
+                if (t0.kind == TRACK_TEXT) {
+                    const Clip *c0 = t0.at(a.playhead);
+                    if (!c0 || c0->text.text.empty()) continue;
+                    Vector2 qq[4];
+                    if (capQuad(c0->text, qq) && inQuad(m, qq))
+                        under.push_back(Pick{true, i, c0->id});
+                } else if (t0.kind == TRACK_VIDEO) {
+                    if (!t0.at(a.playhead)) continue;
+                    if (CheckCollisionPointRec(m, toScreen(layerRect(t0))))
+                        under.push_back(Pick{false, i, 0});
+                }
+            }
+
+            ClipRef capHit;
+            for (const Pick &pk : under)
+                if (pk.text) { capHit = ClipRef{pk.track, pk.clip}; break; }
+
+            /* --- Tab: the next one down --- */
+            if (overView && !under.empty() && IsKeyPressed(KEY_TAB) &&
+                a.drag == DRAG_NONE) {
+                /* Where the current selection sits in that list, so Tab moves
+                 * one layer back rather than always to the front. */
+                int at = -1;
+                for (size_t i = 0; i < under.size(); i++) {
+                    if (under[i].text) {
+                        if (a.textClip.track == under[i].track &&
+                            a.textClip.clip == under[i].clip && !a.sel.empty())
+                            at = (int)i;
+                    } else if (a.layoutTrack == under[i].track) {
+                        at = (int)i;
+                    }
+                }
+
+                const Pick &next = under[(size_t)((at + 1) % (int)under.size())];
+                if (next.text) {
+                    a.layoutTrack = -1;
+                    a.sel.clear();
+                    a.sel.push_back(ClipRef{next.track, next.clip});
+                    a.textClip = a.sel[0];
+                    a.say("%s", a.proj.tracks[next.track].name.c_str());
+                } else {
+                    a.sel.clear();
+                    a.layoutTrack = next.track;
+                    a.say("%s", a.proj.tracks[next.track].name.c_str());
+                }
             }
 
             /* --- the handles --- */
@@ -454,6 +508,20 @@ void previewPane(App &a, Rectangle r)
                 const float ul = std::sqrt(ux * ux + uy * uy);
                 if (ul > 0.001f) { ux /= ul; uy /= ul; }
                 rot = Vector2{topMid.x + ux * 22.0f, topMid.y + uy * 22.0f};
+
+                /* Kept inside the pane. A caption against the top of the
+                 * frame puts its handle above the canvas, and with a tall
+                 * caption - three lines, or two with a blank between them -
+                 * that lands in the toolbar, where the preview never sees the
+                 * click and the caption cannot be turned at all.
+                 *
+                 * Clamped rather than flipped to the other side: a box that
+                 * tall has no room underneath either, and a handle that moves
+                 * to the far end of the thing it turns is a handle nobody
+                 * will look for. */
+                const float pad = 10.0f;
+                rot.x = std::max(view.x + pad, std::min(view.x + view.width - pad, rot.x));
+                rot.y = std::max(view.y + pad, std::min(view.y + view.height - pad, rot.y));
 
                 for (int i = 0; i < 4; i++)
                     DrawLineEx(q[i], q[(i + 1) & 3], 1.0f, SN_ACCENT);
@@ -483,9 +551,13 @@ void previewPane(App &a, Rectangle r)
                 int corner = -1;
                 bool onRot = false;
                 if (haveBox) {
-                    for (int i = 0; i < 4; i++)
-                        if (near(m, q[i], 9.0f)) corner = i;
-                    onRot = corner < 0 && near(m, rot, 10.0f);
+                    /* The ball first. Clamping it into the pane can park it on
+                     * top of a corner handle, and when the two overlap the one
+                     * that was moved to get there is the one being aimed at. */
+                    onRot = near(m, rot, 10.0f);
+                    if (!onRot)
+                        for (int i = 0; i < 4; i++)
+                            if (near(m, q[i], 9.0f)) corner = i;
                 }
 
                 if (haveBox && (corner >= 0 || onRot)) {
@@ -610,7 +682,12 @@ void previewPane(App &a, Rectangle r)
             /* --- what the pointer says it will do --- */
             if (overView && a.drag == DRAG_NONE) {
                 bool said = false;
-                if (haveBox) {
+                if (haveBox && near(m, rot, 10.0f)) {
+                    sn_cursor(&a.ui, MOUSE_CURSOR_POINTING_HAND);
+                    sn_tip(&a.ui, "drag to turn it - Shift steps by fifteen degrees");
+                    said = true;
+                }
+                if (haveBox && !said) {
                     for (int i = 0; i < 4; i++)
                         if (near(m, q[i], 9.0f)) {
                             sn_cursor(&a.ui, i == 0 || i == 2 ? MOUSE_CURSOR_RESIZE_NWSE
@@ -618,11 +695,6 @@ void previewPane(App &a, Rectangle r)
                             sn_tip(&a.ui, "drag to resize the caption");
                             said = true;
                         }
-                    if (!said && near(m, rot, 10.0f)) {
-                        sn_cursor(&a.ui, MOUSE_CURSOR_POINTING_HAND);
-                        sn_tip(&a.ui, "drag to turn it - Shift steps by fifteen degrees");
-                        said = true;
-                    }
                 }
                 if (!said && capHit.ok()) {
                     sn_cursor(&a.ui, MOUSE_CURSOR_RESIZE_ALL);
@@ -1296,6 +1368,45 @@ static void keys(App &a)
     if (IsKeyPressed(KEY_S)) doSplit(a);
     if (IsKeyPressed(KEY_DELETE) || IsKeyPressed(KEY_BACKSPACE)) doDelete(a, shift);
     if (IsKeyPressed(KEY_F)) zoomFit(a);
+
+    /* --- the canvas, from the keyboard ---
+     *
+     * R turns the selected caption a step at a time; C opens the crop and
+     * layout window for the selected picture. Both are things the mouse can
+     * already do on the preview, and both are here because the mouse is bad
+     * at some of it: a fifteen degree step is not something a hand lands on,
+     * and the handle that turns a caption can end up hard against the edge of
+     * the pane when the caption is against the edge of the frame.
+     *
+     * Steps land on the fifteens rather than fifteen from wherever a drag
+     * left it, so R four times from anything is always ninety degrees round
+     * and always square. */
+    if (IsKeyPressed(KEY_R)) {
+        Clip *cap = nullptr;
+        for (const ClipRef &cr : a.sel) {
+            const Track *t = a.proj.track(cr.track);
+            if (t && t->kind == TRACK_TEXT) { cap = a.proj.clip(cr); break; }
+        }
+        if (cap) {
+            double n = std::round((cap->text.rotation + (shift ? -15.0 : 15.0)) / 15.0) *
+                       15.0;
+            while (n > 180.0) n -= 360.0;
+            while (n <= -180.0) n += 360.0;
+            cap->text.rotation = n;
+            a.changed();
+            a.say("turned to %.0f degrees", n);
+        } else {
+            a.say("select a caption first - click it on the preview");
+        }
+    }
+
+    if (IsKeyPressed(KEY_C)) {
+        if (a.proj.track(a.layoutTrack)) {
+            a.modal = MODAL_LAYOUT;
+        } else {
+            a.say("select a picture first - click it on the preview");
+        }
+    }
 
     /* F12 is not handled here on purpose: raylib takes the screenshot itself,
      * into screenshot000.png beside the program, and a second handler on the
