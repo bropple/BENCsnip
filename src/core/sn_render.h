@@ -54,7 +54,12 @@ public:
     bool hasAudioAt(double t, double dur) const;
 
 private:
-    Source *source(int itemId);
+    /* The open file for this bin item, and for this one of its channels.
+     *
+     * Keyed by both, because a Source asked for one channel is configured for
+     * it: two clips playing two channels of one file need two decoders, the
+     * same way the picture and the sound of one file already do. */
+    Source *source(int itemId, int channel = -1);
 
     const Project *m_p = nullptr;
     std::map<int, Source *> m_open;

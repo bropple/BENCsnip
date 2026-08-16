@@ -114,7 +114,17 @@ public:
      * neither a video nor an audio stream is not an error here - the caller
      * decides whether that is useful - but a file that is not media at all
      * is. */
-    static Source *open(const std::string &path, std::string *err);
+    /* `channel` is which of the file's audio channels this Source hands
+     * back, or -1 for all of them mixed down to stereo the way libav would.
+     *
+     * A Source that has been asked for one channel is a different Source, not
+     * a different call: a decoder is a read position and a resampler is a
+     * configuration, and two clips wanting two channels of one file want two
+     * of each. It is the same argument the video and audio halves of a file
+     * already make - see the note at the top of this file. The channel comes
+     * out on both output channels, because everything above this line is
+     * stereo and a mono clip is a mono clip in both ears. */
+    static Source *open(const std::string &path, std::string *err, int channel = -1);
     ~Source();
 
     const MediaInfo &info() const { return m_info; }
@@ -199,6 +209,8 @@ private:
 
     void *m_swr = nullptr;        /* SwrContext *                         */
     int m_swrRate = 0, m_swrFmt = -1, m_swrChans = 0;
+    int m_channel = -1;         /* which channel this Source is for, or -1 */
+    std::vector<float> m_native; /* the frame before one channel is picked  */
 
     double m_vpos = -1.0;
 

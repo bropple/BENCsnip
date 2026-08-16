@@ -45,6 +45,16 @@ struct Clip {
     double gain = 1.0;       /* audio, linear                            */
     bool muted = false;
 
+    /* Which of the source's audio channels this clip plays, or -1 for all of
+     * them mixed down the way the file says.
+     *
+     * A stereo file arrives as one clip carrying both, which is what somebody
+     * dropping an interview in wants to see. Splitting it makes one clip per
+     * channel, each with a number in here, each on its own track - because
+     * the reason to split is to treat them differently and two things treated
+     * differently cannot share a row. */
+    int channel = -1;
+
     /* How many times [in, out) plays. 1 is a clip; 2.5 is that clip twice
      * and then half of it again. Dragging the tail past the end of the
      * source is what grows it, which is the only way a four-second loop can
@@ -330,6 +340,16 @@ double placeItem(Project &p, int itemId, double t, int videoTrack = -1,
                  int audioTrack = -1);
 
 bool removeClip(Project &p, const ClipRef &r, bool ripple = false);
+
+/* Replace an audio clip with one mono clip per channel of its source, each on
+ * a track with room for it. Returns how many it made, or 0 when there was
+ * nothing to do - a clip whose source has one channel is already mono, and a
+ * clip that has already been split has a channel of its own.
+ *
+ * The clips it makes are unlinked from any video half: a stereo pair that has
+ * been pulled apart is being treated as two things, and dragging the picture
+ * should not drag one of them and not the other. */
+int splitChannels(Project &p, const ClipRef &r);
 
 /* Move a clip to a new position and possibly a new track. Returns where it
  * actually landed, which may differ if it was blocked. */

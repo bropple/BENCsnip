@@ -1459,8 +1459,14 @@ static void menus(App &a)
         Clip *c = a.proj.clip(r);
         if (!c) return;
 
-        switch (pick) {
-        case 0: {
+        /* What the row means rather than which row it was: the menu's rows
+         * come and go with what is under the pointer. See App::clipMenu. */
+        const int what = pick >= 0 && pick < (int)a.clipMenu.size()
+                             ? a.clipMenu[(size_t)pick]
+                             : (int)App::CLIP_NOTHING;
+
+        switch (what) {
+        case App::CLIP_SPLIT: {
             /* Split at the playhead if it is inside this clip, otherwise in
              * the middle of it - which is what "split here" means when the
              * playhead is somewhere else entirely. */
@@ -1470,10 +1476,10 @@ static void menus(App &a)
             a.say("cut at %s", fmtTime(at).c_str());
             break;
         }
-        case 1: doDelete(a, false); break;
-        case 2: doDelete(a, true); break;
-        case 4: c->muted = !c->muted; a.changed(); break;
-        case 5: {
+        case App::CLIP_DELETE: doDelete(a, false); break;
+        case App::CLIP_RIPPLE: doDelete(a, true); break;
+        case App::CLIP_MUTE: c->muted = !c->muted; a.changed(); break;
+        case App::CLIP_CLEAR_FX: {
             /* Fades are on the track's lane now, so this clears the lane
              * rather than two numbers on the clip. It is still offered from a
              * clip's menu because that is where somebody looking to undo a
@@ -1488,7 +1494,18 @@ static void menus(App &a)
             }
             break;
         }
-        case 6: {
+        case App::CLIP_SPLIT_CHANNELS: {
+            const int n = splitChannels(a.proj, r);
+            if (n > 0) {
+                a.clearSel();
+                a.changed();
+                a.say("split into %d mono clips, one per channel", n);
+            } else {
+                a.complain("nothing to split - that clip is already one channel");
+            }
+            break;
+        }
+        case App::CLIP_UNLINK: {
             /* Unlink. Every clip that shares the link id loses it, which is
              * both halves and no more: a split earlier gave each pair its own
              * id precisely so this cannot reach across a cut. */

@@ -194,6 +194,11 @@ bool saveProject(const Project &p, const std::string &path, std::string *err)
                     c.id, c.source, c.link, c.in, c.out, c.pos, c.gain,
                     0.0, 0.0, c.muted ? 1 : 0, c.repeat);
 
+            /* Its own line, and only when it is one channel of several. A
+             * clip playing the whole file says nothing, which is every clip
+             * in every project written before this existed. */
+            if (c.channel >= 0) fprintf(f, "chan %d\n", c.channel);
+
             /* What a caption says and how it looks, on its own lines after
              * the clip they belong to - the arrangement `xform` and `level`
              * already use, and for the same reasons: an older reader skips a
@@ -359,6 +364,11 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
                 p.tracks[trackAt].clips.push_back(c);
                 clipAt = (int)p.tracks[trackAt].clips.size() - 1;
             }
+        } else if (!strncmp(line, "chan ", 5)) {
+            if (trackAt < 0 || clipAt < 0) continue;
+            int ch = -1;
+            if (sscanf(line + 5, "%d", &ch) == 1 && ch >= 0)
+                p.tracks[trackAt].clips[clipAt].channel = ch;
         } else if (!strncmp(line, "tstyle ", 7)) {
             if (trackAt < 0 || clipAt < 0) continue;
             TextStyle &st = p.tracks[trackAt].clips[clipAt].text;

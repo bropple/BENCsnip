@@ -100,6 +100,26 @@ struct App {
     Vector2 dragFrom = {0, 0};
     bool dragMoved = false;
 
+    /* What each row of the clip menu does.
+     *
+     * The menu's rows are not fixed: splitting channels only appears on an
+     * audio clip of a file that has more than one, and unlinking only on a
+     * clip that is linked. It used to be one optional row, placed last so the
+     * handler could find it by counting; with two, counting is a bug waiting
+     * for whoever adds the third. The pane fills this in as it builds the
+     * menu and the handler reads the action out of it. */
+    enum ClipAction {
+        CLIP_SPLIT = 0,
+        CLIP_DELETE,
+        CLIP_RIPPLE,
+        CLIP_MUTE,
+        CLIP_CLEAR_FX,
+        CLIP_SPLIT_CHANNELS,
+        CLIP_UNLINK,
+        CLIP_NOTHING
+    };
+    std::vector<int> clipMenu;
+
     /* Which ramp on which effects lane is selected, and which is being
      * dragged. An index rather than an id: effects are a small sorted vector
      * on a track and nothing outside this refers to one. */

@@ -247,9 +247,23 @@ void binPane(App &a, Rectangle r)
         sn_text_clip(&ui, SN_F_SMALL, b.info.name.c_str(), tx, row.y + 8, tw,
                      b.missing ? SN_ALERT : SN_TEXT);
 
+        /* What is in it, and how much of it. The channel count is here
+         * because whether a file is mono, stereo or more decides whether
+         * there is anything to split apart, and that is a question about the
+         * file rather than about the clip it becomes. */
+        const char *chans = !b.info.hasAudio ? ""
+                            : b.info.chans == 1 ? "  mono"
+                            : b.info.chans == 2 ? "  stereo"
+                                                : nullptr;
+        char chbuf[24];
+        if (!chans) {
+            snprintf(chbuf, sizeof chbuf, "  %d ch", b.info.chans);
+            chans = chbuf;
+        }
+
         char line[128];
-        snprintf(line, sizeof line, "%s  %s%s", fmtTime(b.info.duration).c_str(),
-                 b.info.hasVideo ? "V" : "", b.info.hasAudio ? "A" : "");
+        snprintf(line, sizeof line, "%s  %s%s%s", fmtTime(b.info.duration).c_str(),
+                 b.info.hasVideo ? "V" : "", b.info.hasAudio ? "A" : "", chans);
         sn_text(&ui, SN_F_TINY, line, tx, row.y + 28, SN_DIM);
 
         if (b.info.hasVideo) {

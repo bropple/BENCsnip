@@ -414,6 +414,41 @@ static std::vector<ClipRef> linked(const Project &p, const ClipRef &r)
     return v;
 }
 
+int splitChannels(Project &p, const ClipRef &r)
+{
+    Track *t = p.track(r.track);
+    const Clip *src = p.clip(r);
+    if (!t || !src || t->kind != TRACK_AUDIO) return 0;
+    if (src->channel >= 0) return 0;            /* already one channel */
+
+    const BinItem *b = p.item(src->source);
+    if (!b || !b->info.hasAudio) return 0;
+
+    const int n = b->info.chans;
+    if (n < 2) return 0;                        /* mono is already split */
+
+    /* Copied before anything moves: it points into a vector that is about to
+     * be written to, and every track lookup below can reallocate it. */
+    const Clip base = *src;
+
+    if (!removeClip(p, r, false)) return 0;
+
+    int made = 0;
+    for (int ch = 0; ch < n; ch++) {
+        Clip c = base;
+        c.id = p.newId();
+        c.channel = ch;
+        c.link = 0;                             /* see the note in the header */
+
+        const int into = p.freeTrack(TRACK_AUDIO, c.pos, c.end());
+        if (into < 0) continue;
+        if (addClip(p, into, c)) made++;
+    }
+
+    p.dirty = true;
+    return made;
+}
+
 bool removeClip(Project &p, const ClipRef &r, bool rippleAfter)
 {
     const Clip *c = p.clip(r);

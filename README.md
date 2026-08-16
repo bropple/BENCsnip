@@ -84,6 +84,11 @@ middle piece and press **Shift+Delete**. Then **Ctrl+E**.
   to move it. On a video or caption track it fades the picture; on an audio
   track, the level. Fades are a range on the timeline rather than a corner of
   a clip, so one can cross a cut, sit in the middle of a clip, or happen twice.
+* **Channels, when you want them.** A file's audio arrives as one clip
+  however many channels it has — the bin says mono, stereo or how many — and
+  right-clicking it offers to split them apart, one mono clip per channel,
+  each on its own track. Nothing is downmixed on the way: each clip decodes
+  the channel it is for.
 * **A level per audio track.** A fader in the track head, on top of the level
   already on each clip, so turning a whole track of dialogue down is one
   gesture rather than one per clip.

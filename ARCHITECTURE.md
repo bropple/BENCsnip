@@ -116,6 +116,13 @@ forgot one.
 
 ## Decoding
 
+A `Source` is also per *channel*. A clip can play one channel of its file
+rather than the mix, and a Source asked for one is configured for it — the
+resampler is told to do no mixing and the channel is picked out afterwards,
+because letting it downmix to stereo first makes anything past the second
+channel unrecoverable. Two clips playing two channels of one file are two
+Sources, which is the same argument as below.
+
 A `Source` opens the same file twice: one `AVFormatContext` for its video
 stream, another for its audio. One context has one read position, so a seek
 made to find a video frame also moves the audio, and playing a clip whose audio

@@ -416,7 +416,7 @@ static bool demux_open(const std::string &path, AVMediaType type, Source::Demux 
     return true;
 }
 
-Source *Source::open(const std::string &path, std::string *err)
+Source *Source::open(const std::string &path, std::string *err, int channel)
 {
     quiet_once();
 
@@ -425,6 +425,7 @@ Source *Source::open(const std::string &path, std::string *err)
 
     Source *s = new Source();
     s->m_info = mi;
+    s->m_channel = (channel >= 0 && channel < mi.chans) ? channel : -1;
 
     if (mi.hasVideo && !demux_open(path, AVMEDIA_TYPE_VIDEO, s->m_v))
         s->m_info.hasVideo = false;
@@ -728,8 +729,20 @@ bool Source::nextAudio(AudioBlock *out)
     if (!demux_next_frame(m_a)) return false;
 
     AVFrame *f = FRM(m_a);
+
+    /* Asked for one channel, the resampler is told to do no mixing at all -
+     * output the same layout it was given - and the channel is picked out
+     * afterwards. Letting swr downmix to stereo and then trying to recover a
+     * channel from that is not possible for anything past the second, and
+     * asking it to map every input to the one wanted still puts the downmix
+     * coefficients in the way. Format and rate are what a resampler is for;
+     * choosing a channel is a copy. */
+    const int inCh = f->ch_layout.nb_channels;
+    const bool pick = m_channel >= 0 && inCh > 0;
+    const int outCh = pick ? inCh : CHANS;
+
     AVChannelLayout outLayout;
-    av_channel_layout_default(&outLayout, CHANS);
+    av_channel_layout_default(&outLayout, outCh);
 
     SwrContext *swr = (SwrContext *)m_swr;
     if (!swr) {
@@ -744,9 +757,9 @@ bool Source::nextAudio(AudioBlock *out)
         m_swr = swr;
         m_swrRate = f->sample_rate;
         m_swrFmt = f->format;
-        m_swrChans = f->ch_layout.nb_channels;
+        m_swrChans = inCh;
     } else if (m_swrRate != f->sample_rate || m_swrFmt != f->format ||
-               m_swrChans != f->ch_layout.nb_channels) {
+               m_swrChans != inCh) {
         /* Some containers change format mid-stream. Rebuilding is rare
          * enough that the cost does not matter and cheap enough that
          * refusing to would be silly. */
@@ -758,8 +771,15 @@ bool Source::nextAudio(AudioBlock *out)
 
     int maxOut = (int)av_rescale_rnd(swr_get_delay(swr, f->sample_rate) + f->nb_samples,
                                      RATE, f->sample_rate, AV_ROUND_UP);
-    out->pcm.resize((size_t)maxOut * CHANS);
-    uint8_t *dst = (uint8_t *)out->pcm.data();
+
+    uint8_t *dst;
+    if (pick) {
+        m_native.resize((size_t)maxOut * outCh);
+        dst = (uint8_t *)m_native.data();
+    } else {
+        out->pcm.resize((size_t)maxOut * CHANS);
+        dst = (uint8_t *)out->pcm.data();
+    }
 
     int got = swr_convert(swr, &dst, maxOut,
                           (const uint8_t **)f->extended_data, f->nb_samples);
@@ -767,8 +787,20 @@ bool Source::nextAudio(AudioBlock *out)
     av_frame_unref(f);
 
     if (got < 0) return false;
+
+    if (pick) {
+        const int k = m_channel < outCh ? m_channel : 0;
+        out->pcm.resize((size_t)got * CHANS);
+        for (int i = 0; i < got; i++) {
+            const float v = m_native[(size_t)i * outCh + k];
+            out->pcm[(size_t)i * CHANS + 0] = v;
+            out->pcm[(size_t)i * CHANS + 1] = v;
+        }
+    } else {
+        out->pcm.resize((size_t)got * CHANS);
+    }
+
     out->frames = got;
-    out->pcm.resize((size_t)got * CHANS);
     out->pts = t;
     return true;
 }

@@ -372,6 +372,13 @@ testmedia:
 	  -c:v libvpx-vp9 -b:v 500k -c:a libopus media/test2.webm
 	ffmpeg -y -v error -f lavfi -i sine=frequency=330:duration=6 \
 	  -c:a libmp3lame media/test3.mp3
+	@# Stereo with two different tones in it, for the channel split. Every
+	@# other file here is mono, so a split of one of those cannot show
+	@# whether the channels came apart or were merely copied.
+	ffmpeg -y -v error -f lavfi -i sine=frequency=300:duration=5 \
+	  -f lavfi -i sine=frequency=3000:duration=5 \
+	  -filter_complex "[0:a][1:a]join=inputs=2:channel_layout=stereo[a]" \
+	  -map "[a]" -c:a flac media/stereo.flac
 	@# A transparent animation, for the compositing tests: a solid gold square
 	@# in the middle of a 240x240 frame with nothing around it. Deliberately a
 	@# square rather than a star or a glyph - the test samples one point that

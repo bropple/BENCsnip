@@ -38,25 +38,29 @@ void Renderer::reset()
     m_text.clear();
 }
 
-Source *Renderer::source(int itemId)
+Source *Renderer::source(int itemId, int channel)
 {
-    auto it = m_open.find(itemId);
+    /* One number for the pair. Channel counts are small and bin ids are
+     * sequential, so this is a key rather than a hash and cannot collide. */
+    const int key = itemId * 64 + (channel < 0 ? 0 : (channel % 63) + 1);
+
+    auto it = m_open.find(key);
     if (it != m_open.end()) return it->second;
-    if (m_failed.count(itemId)) return nullptr;
+    if (m_failed.count(key)) return nullptr;
 
     const BinItem *b = m_p ? m_p->item(itemId) : nullptr;
-    if (!b || b->missing) { m_failed[itemId] = true; return nullptr; }
+    if (!b || b->missing) { m_failed[key] = true; return nullptr; }
 
     std::string err;
-    Source *s = Source::open(b->info.path, &err);
+    Source *s = Source::open(b->info.path, &err, channel);
     if (!s) {
         /* Remembered, so a timeline full of clips from one broken file does
          * not try to open it once per frame. */
-        m_failed[itemId] = true;
+        m_failed[key] = true;
         m_err = err;
         return nullptr;
     }
-    m_open[itemId] = s;
+    m_open[key] = s;
     return s;
 }
 
@@ -319,7 +323,7 @@ void Renderer::audioAt(double t, int frames, float *dst)
 
             const BinItem *bi = m_p->item(c.source);
             if (!bi || !bi->info.hasAudio) continue;
-            Source *s = source(c.source);
+            Source *s = source(c.source, c.channel);
             if (!s || !s->hasAudio()) continue;
 
             int off = (int)std::lround((a - bs) * RATE);

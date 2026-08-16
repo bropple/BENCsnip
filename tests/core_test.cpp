@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -43,6 +44,7 @@ static int checks = 0;
 static const char *V1 = "media/test1.mp4";      /* 8 s, 1280x720, 30 fps */
 static const char *V2 = "media/test2.webm";     /* 5 s, 640x480, 25 fps  */
 static const char *A1 = "media/test3.mp3";      /* 6 s, audio only       */
+static const char *S2 = "media/stereo.flac";   /* 5 s, 300 Hz L, 3 kHz R */
 static const char *G1 = "media/overlay.gif";   /* 0.8 s, transparent    */
 static const char *V5 = "media/test5.mp4";      /* 2 s, a gradient       */
 static const char *V6 = "media/test6.mp4";      /* 2 s, silent audio     */
@@ -809,6 +811,115 @@ static void test_render()
  * Project file
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * Audio channels
+ *
+ * Every other file in media/ is mono, which is why stereo.flac exists: a
+ * split of a mono file cannot show whether the channels came apart or were
+ * merely copied. This one has 300 Hz in the left and 3 kHz in the right, so
+ * which channel came back is a question about the sound rather than about
+ * the plumbing.
+ * ------------------------------------------------------------------ */
+
+static void test_channels()
+{
+    printf("audio channels\n");
+
+    if (!have(S2)) {
+        printf("  (no %s - skipping. `make testmedia` writes it.)\n", S2);
+        return;
+    }
+
+    /* How much of a frequency is in one output channel of a block. */
+    auto energy = [](const std::vector<float> &pcm, double f, int side) {
+        double re = 0, im = 0;
+        const int n = (int)(pcm.size() / sn::CHANS);
+        for (int i = 0; i < n; i++) {
+            const double ang = 2.0 * 3.14159265358979323846 * f * i / sn::RATE;
+            re += pcm[(size_t)i * sn::CHANS + side] * std::cos(ang);
+            im += pcm[(size_t)i * sn::CHANS + side] * std::sin(ang);
+        }
+        return std::sqrt(re * re + im * im) / n;
+    };
+
+    std::string err;
+    sn::MediaInfo mi;
+    CHECK(sn::probe(S2, &mi, &err), "probe: %s", err.c_str());
+    CHECK(mi.chans == 2, "it knows there are two channels, got %d", mi.chans);
+
+    std::vector<float> buf((size_t)4096 * sn::CHANS);
+
+    /* Untouched, it is the file: one tone in each ear. */
+    {
+        std::unique_ptr<sn::Source> s(sn::Source::open(S2, &err));
+        CHECK(s != nullptr, "open: %s", err.c_str());
+        if (!s) return;
+        s->audioAt(1.0, 4096, buf.data());
+        CHECK(energy(buf, 300, 0) > 0.02, "300 Hz is in the left");
+        CHECK(energy(buf, 3000, 1) > 0.02, "3 kHz is in the right");
+        CHECK(energy(buf, 3000, 0) < 0.005, "and not the other way round");
+    }
+
+    /* Asked for one, it is that one in both ears. */
+    for (int ch = 0; ch < 2; ch++) {
+        std::unique_ptr<sn::Source> s(sn::Source::open(S2, &err, ch));
+        CHECK(s != nullptr, "open channel %d: %s", ch, err.c_str());
+        if (!s) continue;
+        s->audioAt(1.0, 4096, buf.data());
+
+        const double mine = energy(buf, ch == 0 ? 300 : 3000, 0);
+        const double theirs = energy(buf, ch == 0 ? 3000 : 300, 0);
+        CHECK(mine > 0.02, "channel %d carries its own tone, %f", ch, mine);
+        CHECK(theirs < 0.005, "and none of the other one, %f", theirs);
+        CHECK(std::fabs(energy(buf, ch == 0 ? 300 : 3000, 1) - mine) < 1e-6,
+              "in both ears");
+    }
+
+    /* And splitting a placed clip makes one mono clip per channel, on tracks
+     * of their own, unlinked from anything. */
+    {
+        sn::Project p = sn::newProject();
+        const int id = sn::importFile(p, S2, &err);
+        CHECK(id != 0, "import: %s", err.c_str());
+        sn::placeItem(p, id, 0.0);
+
+        int at = -1;
+        for (size_t i = 0; i < p.tracks.size(); i++)
+            if (p.tracks[i].kind == sn::TRACK_AUDIO && !p.tracks[i].clips.empty())
+                at = (int)i;
+        CHECK(at >= 0, "it landed on an audio track");
+        if (at < 0) return;
+
+        const sn::ClipRef r{at, p.tracks[at].clips[0].id};
+        CHECK(p.clip(r)->channel == -1, "and starts as one clip of the whole file");
+
+        const int made = sn::splitChannels(p, r);
+        CHECK(made == 2, "it split into two, got %d", made);
+
+        int seen[2] = {0, 0};
+        int rows = 0;
+        for (const sn::Track &t : p.tracks) {
+            if (t.kind != sn::TRACK_AUDIO) continue;
+            for (const sn::Clip &c : t.clips) {
+                if (c.channel >= 0 && c.channel < 2) { seen[c.channel]++; rows++; }
+                CHECK(c.link == 0, "the halves are unlinked");
+            }
+        }
+        CHECK(seen[0] == 1 && seen[1] == 1, "one clip per channel, got %d and %d",
+              seen[0], seen[1]);
+        CHECK(rows == 2, "and nothing else left over, got %d", rows);
+
+        /* Splitting one of the halves again is a no-op rather than a mess. */
+        for (size_t i = 0; i < p.tracks.size(); i++)
+            if (p.tracks[i].kind == sn::TRACK_AUDIO && !p.tracks[i].clips.empty()) {
+                const sn::ClipRef again{(int)i, p.tracks[i].clips[0].id};
+                CHECK(sn::splitChannels(p, again) == 0,
+                      "splitting a mono clip does nothing");
+                break;
+            }
+    }
+}
+
 static void test_project()
 {
     printf("project file\n");
@@ -1348,6 +1459,7 @@ int main()
     if (have(V1) && have(V2) && have(A1)) {
         test_media();
         test_render();
+        test_channels();
         test_project();
         test_export();
     } else {

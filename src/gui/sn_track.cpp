@@ -313,7 +313,18 @@ static void draw_clip(App &a, int idx, const Clip &c, TrackKind kind, bool hot)
         Rectangle strip = {r.x + 1, r.y + r.height - 15, r.width - 2, 14};
         DrawRectangleRec(strip, Color{0, 0, 0, 90});
 
+        static char label[256];
         const char *nm = text ? "caption" : (b ? b->info.name.c_str() : "?");
+        if (c.channel >= 0) {
+            /* Which channel, by the name anybody uses for it when there are
+             * two, and by its number when there are more than two names to
+             * remember. */
+            const int nch = b ? b->info.chans : 0;
+            const char *side = nch == 2 ? (c.channel == 0 ? "L" : "R") : nullptr;
+            if (side) snprintf(label, sizeof label, "%s  %s", nm, side);
+            else snprintf(label, sizeof label, "%s  ch%d", nm, c.channel + 1);
+            nm = label;
+        }
         sn_text_clip(&ui, SN_F_TINY, nm, strip.x + 4,
                      strip.y + 1, strip.width - (r.width > 110 ? 60 : 8), SN_TEXT);
         if (r.width > 110) {
@@ -1158,23 +1169,39 @@ void timelinePane(App &a, Rectangle r)
         const Clip *rc = a.proj.clip(overClip);
         const bool linked = rc && rc->link != 0;
 
-        /* The last item changes with what is under the pointer, and it is
-         * last so the handler can find it by position. */
         static const char *items[8];
         static char linkItem[64];
+        static char chanItem[64];
         int n = 0;
-        items[n++] = "split here";
-        items[n++] = "delete";
-        items[n++] = "delete and close the gap";
-        items[n++] = "-";
-        items[n++] = "mute";
-        items[n++] = "clear this track's effects";
+
+        a.clipMenu.clear();
+        auto add = [&](const char *label, App::ClipAction what) {
+            items[n++] = label;
+            a.clipMenu.push_back((int)what);
+        };
+
+        add("split here", App::CLIP_SPLIT);
+        add("delete", App::CLIP_DELETE);
+        add("delete and close the gap", App::CLIP_RIPPLE);
+        add("-", App::CLIP_NOTHING);
+        add("mute", App::CLIP_MUTE);
+        add("clear this track's effects", App::CLIP_CLEAR_FX);
+
+        /* Only where there is something to split: a mono file is already one
+         * channel, and a clip that has been split has one of its own. */
+        const BinItem *rb = rc ? a.proj.item(rc->source) : nullptr;
+        if (rc && rc->channel < 0 && rb && rb->info.hasAudio && rb->info.chans > 1 &&
+            a.proj.tracks[overClip.track].kind == TRACK_AUDIO) {
+            snprintf(chanItem, sizeof chanItem, "split its %d channels apart",
+                     rb->info.chans);
+            add(chanItem, App::CLIP_SPLIT_CHANNELS);
+        }
 
         if (linked) {
             snprintf(linkItem, sizeof linkItem, "unlink from its %s",
                      a.proj.tracks[overClip.track].kind == TRACK_VIDEO ? "audio"
                                                                        : "video");
-            items[n++] = linkItem;
+            add(linkItem, App::CLIP_UNLINK);
         }
 
         a.select(overClip, false);
