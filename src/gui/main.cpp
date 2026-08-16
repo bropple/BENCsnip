@@ -38,7 +38,14 @@
 
 namespace sn {
 
-enum { TOOLBAR_H = 38, TRANSPORT_H = 34, STATUS_H = 22, BIN_W = 264 };
+enum {
+    TOOLBAR_H = 38,
+    TRANSPORT_H = 34,
+    STATUS_H = 22,
+    BIN_W = 264,       /* the media drawer, open           */
+    INSPECT_W = 296,   /* the inspector, open              */
+    TAB_W = 16         /* the strip either drawer hangs on */
+};
 
 /* Everything ffmpeg is likely to be handed, for the file dialogs. Not a limit
  * on what can be dropped - a drop is given straight to libav, which knows
@@ -230,6 +237,18 @@ void doImport(App &a, const std::string &path, bool place)
 
     const BinItem *b = a.proj.item(id);
     if (b) a.say("%s  %s", b->info.name.c_str(), fmtTime(b->info.duration).c_str());
+}
+
+/* Show something in the inspector, opening the drawer if it is shut.
+ *
+ * It does not pin it: somebody who wanted it to stay can say so, and a panel
+ * that pinned itself every time it was used would never close again. */
+static void openInspector(App &a, App::InspectPage page)
+{
+    a.inspectPage = (int)page;
+    a.inspectScroll = 0.0f;
+    a.inspect.open = true;
+    a.inspect.touched = GetTime();
 }
 
 /* ------------------------------------------------------------------ *
@@ -712,7 +731,7 @@ void previewPane(App &a, Rectangle r)
             if (overView && capHit.ok() && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
                 sn_double_click(&a.ui, 5300 + capHit.track)) {
                 a.textClip = capHit;
-                a.modal = MODAL_TEXT;
+                openInspector(a, App::INSPECT_TEXT);
             }
         }
 
@@ -892,7 +911,7 @@ void previewPane(App &a, Rectangle r)
         if (overView && hit >= 0 && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
             sn_double_click(&a.ui, 5100 + hit)) {
             a.layoutTrack = hit;
-            a.modal = MODAL_LAYOUT;
+            openInspector(a, App::INSPECT_LAYOUT);
         }
     }
 
@@ -1131,7 +1150,7 @@ static void cmd_add_text(App &a)
     a.sel.push_back(ClipRef{track, put->id});
     a.textClip = a.sel[0];
     a.changed();
-    a.modal = MODAL_TEXT;
+    openInspector(a, App::INSPECT_TEXT);
     a.say("caption added at %s", fmtTime(c.pos).c_str());
 }
 
@@ -1413,7 +1432,7 @@ static void keys(App &a)
 
     if (IsKeyPressed(KEY_C)) {
         if (a.proj.track(a.layoutTrack)) {
-            a.modal = MODAL_LAYOUT;
+            openInspector(a, App::INSPECT_LAYOUT);
         } else {
             a.say("select a picture first - click it on the preview");
         }
@@ -1596,7 +1615,7 @@ static void menus(App &a)
 
     if (tag == 101) {                     /* a caption on the timeline */
         switch (pick) {
-        case 0: a.modal = MODAL_TEXT; break;
+        case 0: openInspector(a, App::INSPECT_TEXT); break;
         case 2: {
             if (!a.sel.empty()) {
                 const ClipRef r = a.sel[0];
@@ -1907,6 +1926,8 @@ static int run(int argc, char **argv)
     /* The font before anything else. Everything this program draws is drawn
      * with it, and it costs a millisecond and a half. */
     App a;
+    a.bin.open = a.bin.pinned = true;
+    a.bin.w = (float)BIN_W;
     sn_ui_init(&a.ui);
     mark("font");
     first_frame();
@@ -2015,8 +2036,26 @@ static int run(int argc, char **argv)
          * two tracks and a ceiling that leaves the preview usable. */
         const float tlH = std::max(200.0f, std::min(H * 0.42f, H - 340.0f));
         Rectangle rTimeline = {0, rStatus.y - tlH, W, tlH};
-        Rectangle rBin = {0, rTool.height, BIN_W, rTimeline.y - rTool.height};
-        Rectangle rPreview = {BIN_W, rTool.height, W - BIN_W, rTimeline.y - rTool.height};
+        /* --- the two drawers ---
+         *
+         * A tab at each edge, always there, and a column that slides out of
+         * it. The middle gets what is left: the preview shrinks rather than
+         * being covered, because a panel over the picture hides the thing
+         * being adjusted, which for the inspector is the wrong half to hide.
+         */
+        const float band = rTimeline.y - rTool.height;
+        Rectangle lTab = {0, rTool.height, TAB_W, band};
+        Rectangle rTab = {W - TAB_W, rTool.height, TAB_W, band};
+
+        Rectangle rBin = {lTab.width, rTool.height, a.bin.w, band};
+        Rectangle rInspect = {W - TAB_W - a.inspect.w, rTool.height, a.inspect.w, band};
+        Rectangle rPreview = {rBin.x + rBin.width, rTool.height,
+                              std::max(60.0f, rInspect.x - (rBin.x + rBin.width)), band};
+
+        /* A drag that began in the bin keeps it open all the way to the
+         * timeline, which is outside it. */
+        drawerStep(a, a.bin, rBin, (float)BIN_W, a.drag == DRAG_FROM_BIN);
+        drawerStep(a, a.inspect, rInspect, (float)INSPECT_W, false);
 
         a.rBin = rBin;
         a.rStatus = rStatus;
@@ -2047,7 +2086,11 @@ static int run(int argc, char **argv)
         a.ui.suppress = modal;
 
         toolbar(a, rTool);
-        binPane(a, rBin);
+        if (rBin.width > 1) binPane(a, rBin);
+        if (rInspect.width > 1) inspectPane(a, rInspect);
+
+        drawerTab(a, a.bin, lTab, SN_I_FOLDER, "MEDIA", true);
+        drawerTab(a, a.inspect, rTab, SN_I_CROP, "SETUP", false);
         previewPane(a, rPreview);
         timelinePane(a, rTimeline);
 
@@ -2102,8 +2145,6 @@ static int run(int argc, char **argv)
         a.ui.suppress = false;
         switch (a.modal) {
         case MODAL_EXPORT: exportDialog(a); break;
-        case MODAL_LAYOUT: layoutDialog(a); break;
-        case MODAL_TEXT:   textDialog(a); break;
         case MODAL_HELP:   helpDialog(a); break;
         case MODAL_CANVAS: canvasDialog(a); break;
         case MODAL_INFO: infoWindow(a); break;

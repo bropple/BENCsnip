@@ -64,6 +64,12 @@ middle piece and press **Shift+Delete**. Then **Ctrl+E**.
   at once — **the top row is the back of the picture and the bottom row is in
   front**, which is upside down compared to most editors and is what this one
   was asked for.
+* **Two panels that get out of the way.** The media bin on the left and the
+  inspector on the right slide out of a tab at the edge, sit *beside* the
+  picture rather than over it, and close themselves five seconds after you
+  leave — or stay for good if you pin them. Everything about a video layer or
+  a caption is in the right-hand one, adjustable while the thing you are
+  adjusting is on screen and the transport still works.
 * **A layout per video track.** Size, position, crop and mirrors, relative to
   the canvas, so a small video can play in the corner of a big one or two can sit
   side by side. There are presets for the layouts anyone actually wants. The

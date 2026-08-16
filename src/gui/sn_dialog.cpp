@@ -748,187 +748,6 @@ float g_fontScroll = 0;
 
 } /* namespace */
 
-void textDialog(App &a)
-{
-    sn_ui &ui = a.ui;
-
-    Clip *c = a.proj.clip(a.textClip);
-    const Track *tr = a.proj.track(a.textClip.track);
-    if (!c || !tr || tr->kind != TRACK_TEXT) { a.modal = MODAL_NONE; return; }
-
-    TextStyle &st = c->text;
-
-    Rectangle r = modal_frame(a, "CAPTION", 620, 590);
-
-    sn_text(&ui, SN_F_TINY,
-            "drag it about on the preview behind this, or use its handles to resize "
-            "and turn it.",
-            r.x + 16, r.y + 38, SN_DIM);
-
-    float y = r.y + 62;
-
-    /* --- the words --- */
-    {
-        std::string line[3];
-        split_lines(st.text, line);
-
-        label(a, "WORDS", r.x + 16, y + 4);
-        bool edited = false;
-        for (int i = 0; i < 3; i++) {
-            Rectangle f = {r.x + 114, y + i * 26.0f, 480, 22};
-            if (sn_field(&ui, 8800 + i, f, line[i], i == 0 ? "the caption" : ""))
-                edited = true;
-        }
-        if (edited) {
-            st.text = join_lines(line);
-            a.changed(true);
-        }
-        y += 26 * 3 + 12;
-    }
-
-    /* --- the face --- */
-    {
-        label(a, "FONT", r.x + 16, y + 4);
-
-        const std::vector<FontEntry> &fonts = systemFonts();
-
-        std::string shown = st.font.empty() ? std::string("the one in the program")
-                                            : std::string();
-        if (shown.empty()) {
-            for (const FontEntry &f : fonts)
-                if (f.path == st.font) { shown = f.name; break; }
-            if (shown.empty()) shown = st.font;    /* a path nothing here lists */
-        }
-
-        Color nameCol = SN_TEXT;
-        if (textMissingFont(st)) {
-            nameCol = SN_AMBER;
-            shown += "  - not on this machine, using the program's";
-        }
-        sn_text_clip(&ui, SN_F_SMALL, shown.c_str(), r.x + 114, y, 380, nameCol);
-
-        Rectangle emb = {r.x + 506, y - 4, 88, 22};
-        if (sn_button(&ui, 8810, emb, "BUILT IN", !st.font.empty())) {
-            st.font.clear();
-            a.changed();
-        }
-        y += 26;
-
-        Rectangle filter = {r.x + 114, y, 480, 22};
-        sn_field(&ui, 8811, filter, g_fontFilter, "type to find a font");
-        y += 28;
-
-        /* The matches. Six rows: enough to choose from, small enough to leave
-         * the colours on the same screen. */
-        std::vector<const FontEntry *> hit;
-        for (const FontEntry &f : fonts) {
-            if (g_fontFilter.empty()) { hit.push_back(&f); continue; }
-            std::string hay = f.name, ned = g_fontFilter;
-            for (char &ch : hay) ch = (char)tolower((unsigned char)ch);
-            for (char &ch : ned) ch = (char)tolower((unsigned char)ch);
-            if (hay.find(ned) != std::string::npos) hit.push_back(&f);
-        }
-
-        const int rows = 6;
-        Rectangle list = {r.x + 114, y, 480, rows * 20.0f};
-        DrawRectangleRec(list, SN_WELL);
-        DrawRectangleLinesEx(list, 1, SN_BORDER);
-
-        const int maxTop = std::max(0, (int)hit.size() - rows);
-        if (CheckCollisionPointRec(GetMousePosition(), list) && !sn_ui_blocked(&ui))
-            g_fontScroll -= GetMouseWheelMove() * 2.0f;
-        g_fontScroll = std::max(0.0f, std::min((float)maxTop, g_fontScroll));
-
-        const int top = (int)g_fontScroll;
-        for (int i = 0; i < rows && top + i < (int)hit.size(); i++) {
-            const FontEntry *f = hit[(size_t)(top + i)];
-            Rectangle row = {list.x + 1, list.y + 1 + i * 20.0f, list.width - 2, 19};
-            const bool over = CheckCollisionPointRec(GetMousePosition(), row) &&
-                              !sn_ui_blocked(&ui);
-            const bool mine = f->path == st.font;
-
-            if (mine) DrawRectangleRec(row, Color{0x2d, 0x5c, 0x8c, 140});
-            else if (over) DrawRectangleRec(row, SN_PANEL);
-
-            sn_text_clip(&ui, SN_F_TINY, f->name.c_str(), row.x + 6, row.y + 4,
-                         row.width - 12, mine ? SN_TEXT : SN_DIM);
-
-            if (over && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                st.font = f->path;
-                a.changed();
-            }
-        }
-        if (hit.empty())
-            sn_text(&ui, SN_F_TINY, "nothing on this machine matches", list.x + 6,
-                    list.y + 6, SN_EDGE);
-
-        {
-            char n[64];
-            snprintf(n, sizeof n, "%d of %d", (int)hit.size(), (int)fonts.size());
-            sn_text(&ui, SN_F_TINY, n, r.x + 16, list.y + 4, SN_EDGE);
-        }
-        y += list.height + 14;
-    }
-
-    /* --- size, turn, spacing --- */
-    struct Num {
-        const char *name;
-        double *v, lo, hi;
-        const char *fmt;
-    } nums[] = {
-        {"SIZE", &st.size, 0.01, 0.60, "%.3f of the height"},
-        {"TURN", &st.rotation, -180.0, 180.0, "%.1f degrees"},
-        {"OUTLINE", &st.outlineWidth, 0.0, 0.35, "%.3f of the size"},
-        {"LINE GAP", &st.lineSpacing, 0.8, 2.5, "%.2f x the line"},
-    };
-    for (int i = 0; i < 4; i++) {
-        label(a, nums[i].name, r.x + 16, y);
-        Rectangle sl = {r.x + 114, y - 4, 340, 16};
-        float v = (float)((*nums[i].v - nums[i].lo) / (nums[i].hi - nums[i].lo));
-        if (sn_slider(&ui, 8820 + i, sl, &v)) {
-            *nums[i].v = nums[i].lo + v * (nums[i].hi - nums[i].lo);
-            /* Upright is sticky, the same way it is on the preview's turn
-             * handle: level is what nearly every caption wants. */
-            if (i == 1 && std::fabs(*nums[i].v) < 2.0) *nums[i].v = 0.0;
-            a.changed(true);
-        }
-        char num[64];
-        snprintf(num, sizeof num, nums[i].fmt, *nums[i].v);
-        sn_text(&ui, SN_F_TINY, num, sl.x + sl.width + 12, y - 2, SN_EDGE);
-        y += 26;
-    }
-    y += 6;
-
-    /* --- alignment, which only shows with more than one line --- */
-    {
-        label(a, "ALIGN", r.x + 16, y);
-        static const char *names[3] = {"LEFT", "CENTRE", "RIGHT"};
-        for (int i = 0; i < 3; i++) {
-            Rectangle b = {r.x + 114 + i * 96.0f, y - 6, 90, 22};
-            if (sn_toggle(&ui, 8830 + i, b, names[i], st.align == i)) {
-                st.align = i;
-                a.changed();
-            }
-        }
-        if (st.text.find('\n') == std::string::npos)
-            sn_text(&ui, SN_F_TINY, "needs more than one line", r.x + 410, y - 2,
-                    SN_EDGE);
-        y += 30;
-    }
-
-    /* --- the two colours --- */
-    if (colour_row(a, 8840, "FILL", &st.fill, r.x + 16, y, 580)) a.changed(true);
-    y += 30;
-    if (colour_row(a, 8850, "OUTLINE", &st.outline, r.x + 16, y, 580)) a.changed(true);
-    y += 30;
-
-    Rectangle close = {r.x + r.width - 104, r.y + r.height - 40, 88, 26};
-    if (sn_button_lit(&ui, 8860, close, "DONE", 1) || IsKeyPressed(KEY_ESCAPE)) {
-        a.changed();
-        a.modal = MODAL_NONE;
-    }
-}
-
 /* ------------------------------------------------------------------ *
  * The controls
  *
@@ -991,7 +810,7 @@ const HelpRow HELP[] = {
     {"drag an edge", "trim it - past the end of the source to loop it"},
     {"the ruler", "scrub. It is the only thing that moves the playhead"},
     {"right-click", "split, delete, mute, unlink, split channels"},
-    {"double-click", "a caption, for the window with the words in it"},
+    {"double-click", "a caption, for the panel with its words in it"},
     {"", nullptr},
 
     {nullptr, "THE EFFECTS LANE, UNDER EVERY TRACK"},
@@ -1002,12 +821,19 @@ const HelpRow HELP[] = {
     {"", "a held point steps instead of sliding - that is a square wave"},
     {"", nullptr},
 
+    {nullptr, "THE TWO PANELS"},
+    {"the tabs", "MEDIA on the left, SETUP on the right - click to open"},
+    {"", "they slide out beside the picture rather than over it"},
+    {"", "and close themselves five seconds after you leave"},
+    {"the pin", "in a panel's header keeps it open for good"},
+    {"", nullptr},
+
     {nullptr, "THE PREVIEW"},
     {"click a layer", "select it; drag it about; drag a corner to resize"},
     {"Tab", "the next layer down, where several overlap"},
-    {"double-click", "the numbers for it - crop, size, position, mirrors"},
+    {"double-click", "its numbers in the panel - crop, size, position, mirrors"},
     {"R", "turn the selected caption 15 degrees; Shift+R the other way"},
-    {"C", "crop and layout for the selected picture"},
+    {"C", "the panel, on the selected picture"},
     {"the ball", "above a selected caption turns it; Shift steps by 15"},
     {"", nullptr},
 
@@ -1065,223 +891,375 @@ void helpDialog(App &a)
         a.modal = MODAL_NONE;
 }
 
-void layoutDialog(App &a)
+/* ------------------------------------------------------------------ *
+ * The inspector
+ *
+ * What is selected, on the right, in a column rather than in a window over
+ * the middle of the screen.
+ *
+ * It was two modal dialogs. A modal is the wrong shape for this: adjusting a
+ * layer's size or a caption's colour is something you do *while looking at
+ * the picture*, and a window in the middle of the screen covers the picture.
+ * Worse, it stops the transport, the timeline and everything else until it is
+ * dismissed, so checking what a change looks like a second later meant
+ * closing it, scrubbing, and opening it again.
+ *
+ * One column, everything stacked in one narrow lane, scrolled when it does
+ * not fit. Narrow is what makes it fit beside the preview rather than over
+ * it, and a single lane is what makes narrow work: two columns of controls in
+ * three hundred pixels is two columns of six characters.
+ * ------------------------------------------------------------------ */
+
+namespace {
+
+/* The vertical cursor a panel body is laid out with. Everything here is
+ * "put the next thing under the last thing", which is the whole reason a
+ * column can hold controls a dialog had to arrange by hand. */
+struct Lane {
+    App *a;
+    float x, w, y;
+
+    void gap(float h = 10) { y += h; }
+
+    void title(const char *s)
+    {
+        sn_text_spaced(&a->ui, SN_F_SMALL, s, x, y, SN_ACCENT);
+        y += 18;
+    }
+
+    void note(const char *s)
+    {
+        sn_text_clip(&a->ui, SN_F_TINY, s, x, y, w, SN_EDGE);
+        y += 13;
+    }
+
+    void label(const char *s)
+    {
+        sn_text_spaced(&a->ui, SN_F_TINY, s, x, y, SN_DIM);
+        y += 13;
+    }
+
+    /* A slider with its name above it and its value beside it. */
+    bool number(int id, const char *name, double *v, double lo, double hi,
+                const char *fmt)
+    {
+        label(name);
+        Rectangle sl = {x, y, w - 62, 14};
+        float t = (float)((*v - lo) / (hi - lo));
+        const bool moved = sn_slider(&a->ui, id, sl, &t) != 0;
+        if (moved) *v = lo + t * (hi - lo);
+
+        char num[48];
+        snprintf(num, sizeof num, fmt, *v);
+        sn_text(&a->ui, SN_F_TINY, num, sl.x + sl.width + 8, y + 1, SN_TEXT);
+        y += 20;
+        return moved;
+    }
+};
+
+} /* namespace */
+
+/* --- one track's layout --- */
+static void inspect_layout(App &a, Lane &L)
 {
-    sn_ui &ui = a.ui;
-
     Track *t = a.proj.track(a.layoutTrack);
-    if (!t) { a.modal = MODAL_NONE; return; }
-
-    Rectangle r = modal_frame(a, "TRACK LAYOUT", 560, 520);
-
-    sn_text_spaced(&ui, SN_F_SMALL, t->name.c_str(), r.x + 16, r.y + 38, SN_ACCENT);
-    sn_text(&ui, SN_F_TINY,
-            "or just drag it about on the preview. The export uses the same numbers.",
-            r.x + 56, r.y + 40, SN_DIM);
-
-    /* --- the picture of it --- */
-    const double car = a.proj.height > 0 ? (double)a.proj.width / a.proj.height : 16.0 / 9.0;
-    float pw = 280, ph = (float)(280 / car);
-    if (ph > 170) { ph = 170; pw = (float)(170 * car); }
-
-    Rectangle canvas = {r.x + (560 - pw) * 0.5f, r.y + 66, pw, ph};
-    DrawRectangleRec(canvas, SN_BG);
-    DrawRectangleLinesEx(canvas, 1, SN_BORDER);
-
-    /* The layer, worked out the same way the renderer works it out - crop
-     * first, because it changes the shape that gets fitted. */
-    {
-        const double keepX = std::max(0.02, 1.0 - t->cropL - t->cropR);
-        const double keepY = std::max(0.02, 1.0 - t->cropT - t->cropB);
-
-        double sw = 16, sh = 9;
-        for (const Clip &c : t->clips) {
-            const BinItem *b = a.proj.item(c.source);
-            if (b && b->info.hasVideo) { sw = b->info.dispW(); sh = b->info.dispH(); break; }
-        }
-        sw *= keepX;
-        sh *= keepY;
-
-        const double boxW = pw * std::max(0.01, t->scaleX);
-        const double boxH = ph * std::max(0.01, t->scaleY);
-        const double sa = sw / sh, ba = boxW / boxH;
-
-        double lw = t->stretch ? boxW : (sa > ba ? boxW : boxH * sa);
-        double lh = t->stretch ? boxH : (sa > ba ? boxW / sa : boxH);
-
-        const double ox = (pw - lw) * 0.5 * (1.0 + t->x);
-        const double oy = (ph - lh) * 0.5 * (1.0 + t->y);
-
-        Rectangle layer = {canvas.x + (float)ox, canvas.y + (float)oy, (float)lw,
-                           (float)lh};
-        DrawRectangleRec(layer, Color{0x2d, 0x5c, 0x8c, 200});
-        DrawRectangleLinesEx(layer, 1, SN_ACCENT);
-        sn_text_center(&ui, SN_F_TINY, t->name.c_str(), layer.x + layer.width * 0.5f,
-                       layer.y + layer.height * 0.5f - 6, SN_TEXT);
+    if (!t) {
+        L.note("select a picture on the preview");
+        return;
     }
 
-    /* --- the numbers --- */
-    float y = canvas.y + ph + 16;
+    L.title(t->name.c_str());
+    L.note("or drag it on the preview");
+    L.gap(6);
 
-    /* --- the switches, on a row of their own ---
-     *
-     * The lock decides whether SIZE is one number or two. Locked is the
-     * common case by a mile, so it is one slider until somebody says
-     * otherwise - two sliders that always have to be dragged together are
-     * two chances to get it slightly wrong.
-     *
-     * It used to sit at the right-hand end of the SIZE row, at the exact x
-     * that row writes its value at, so "1.00" was printed underneath the
-     * button and read as a squashed letter inside the word ASPECT. Its own
-     * row, and the mirrors beside it, because none of the three is a number
-     * and a row of numbers is not where a switch belongs.
-     */
-    {
-        Rectangle lock = {r.x + 130, y - 6, 144, 22};
-        if (sn_toggle(&ui, 8710, lock, t->stretch ? "FREE" : "ASPECT LOCKED",
-                      !t->stretch)) {
-            t->stretch = !t->stretch;
-            if (!t->stretch) t->scaleY = t->scaleX;   /* back to square */
-            a.changed();
-        }
-        if (CheckCollisionPointRec(GetMousePosition(), lock) && !sn_ui_blocked(&ui))
-            sn_tip(&ui, t->stretch
-                            ? "the picture fills the box and may distort"
-                            : "the picture keeps its shape inside the box");
-
-        Rectangle fh = {r.x + 288, y - 6, 118, 22};
-        if (sn_toggle(&ui, 8711, fh, "MIRROR L-R", t->flipH)) {
-            t->flipH = !t->flipH;
-            a.changed();
-        }
-        if (CheckCollisionPointRec(GetMousePosition(), fh) && !sn_ui_blocked(&ui))
-            sn_tip(&ui, "swap left and right - what a mirror does to it");
-
-        Rectangle fv = {r.x + 414, y - 6, 118, 22};
-        if (sn_toggle(&ui, 8712, fv, "MIRROR U-D", t->flipV)) {
-            t->flipV = !t->flipV;
-            a.changed();
-        }
-        if (CheckCollisionPointRec(GetMousePosition(), fv) && !sn_ui_blocked(&ui))
-            sn_tip(&ui, "turn it upside down");
-
-        label(a, "PICTURE", r.x + 16, y);
-        y += 32;
+    /* The switches first: they change what the numbers under them mean. */
+    Rectangle lock = {L.x, L.y, L.w, 22};
+    if (sn_toggle(&a.ui, 8710, lock, t->stretch ? "FREE" : "ASPECT LOCKED",
+                  !t->stretch)) {
+        t->stretch = !t->stretch;
+        if (!t->stretch) t->scaleY = t->scaleX;
+        a.changed();
     }
+    L.y += 26;
+
+    Rectangle fh = {L.x, L.y, L.w * 0.5f - 3, 22};
+    Rectangle fv = {L.x + L.w * 0.5f + 3, L.y, L.w * 0.5f - 3, 22};
+    if (sn_toggle(&a.ui, 8711, fh, "MIRROR L-R", t->flipH)) { t->flipH = !t->flipH; a.changed(); }
+    if (sn_toggle(&a.ui, 8712, fv, "MIRROR U-D", t->flipV)) { t->flipV = !t->flipV; a.changed(); }
+    L.y += 30;
 
     if (!t->stretch) {
-        label(a, "SIZE", r.x + 16, y);
-        Rectangle sl = {r.x + 130, y - 4, 260, 16};
-        float v = (float)((t->scaleX - 0.05) / (2.0 - 0.05));
-        if (sn_slider(&ui, 8720, sl, &v)) {
-            t->scaleX = t->scaleY = 0.05 + v * (2.0 - 0.05);
+        if (L.number(8720, "SIZE", &t->scaleX, 0.05, 2.0, "%.2f")) {
+            t->scaleY = t->scaleX;
             a.changed(true);
         }
-        char num[32];
-        snprintf(num, sizeof num, "%.2f", t->scaleX);
-        sn_text(&ui, SN_F_TINY, num, sl.x + sl.width + 10, y - 2, SN_TEXT);
-        sn_text(&ui, SN_F_TINY, "1 fills the canvas", r.x + 16, y + 12, SN_EDGE);
-        y += 34;
+        L.note("1 fills the canvas");
     } else {
-        const char *names[] = {"WIDTH", "HEIGHT"};
-        double *vals[] = {&t->scaleX, &t->scaleY};
-        for (int i = 0; i < 2; i++) {
-            label(a, names[i], r.x + 16, y);
-            Rectangle sl = {r.x + 130, y - 4, 260, 16};
-            float v = (float)((*vals[i] - 0.05) / (2.0 - 0.05));
-            if (sn_slider(&ui, 8722 + i, sl, &v)) {
-                *vals[i] = 0.05 + v * (2.0 - 0.05);
-                a.changed(true);
-            }
-            char num[32];
-            snprintf(num, sizeof num, "%.2f", *vals[i]);
-            sn_text(&ui, SN_F_TINY, num, sl.x + sl.width + 10, y - 2, SN_TEXT);
-            y += 24;
-        }
-        sn_text(&ui, SN_F_TINY, "1 fills the canvas on that axis", r.x + 16, y - 10,
-                SN_EDGE);
-        y += 10;
+        if (L.number(8721, "WIDTH", &t->scaleX, 0.05, 2.0, "%.2f")) a.changed(true);
+        if (L.number(8722, "HEIGHT", &t->scaleY, 0.05, 2.0, "%.2f")) a.changed(true);
     }
+    L.gap(4);
 
+    if (L.number(8723, "LEFT / RIGHT", &t->x, -1.0, 1.0, "%+.2f")) a.changed(true);
+    L.note("-1 left edge, +1 right edge");
+    if (L.number(8724, "UP / DOWN", &t->y, -1.0, 1.0, "%+.2f")) a.changed(true);
+    L.note("-1 top, +1 bottom");
+    L.gap(6);
+
+    L.label("CROP");
     {
-        const char *names[] = {"LEFT / RIGHT", "UP / DOWN"};
-        double *vals[] = {&t->x, &t->y};
-        const char *hints[] = {"-1 left edge, +1 right edge", "-1 top, +1 bottom"};
-        for (int i = 0; i < 2; i++) {
-            label(a, names[i], r.x + 16, y);
-            Rectangle sl = {r.x + 130, y - 4, 260, 16};
-            float v = (float)((*vals[i] + 1.0) / 2.0);
-            if (sn_slider(&ui, 8725 + i, sl, &v)) {
-                *vals[i] = -1.0 + v * 2.0;
+        double *crops[4] = {&t->cropL, &t->cropR, &t->cropT, &t->cropB};
+        static const char *names[4] = {"L", "R", "T", "B"};
+        const float cw = (L.w - 24) / 4.0f;
+        for (int i = 0; i < 4; i++) {
+            Rectangle sl = {L.x + i * (cw + 8), L.y, cw, 14};
+            float v = (float)*crops[i];
+            if (sn_slider(&a.ui, 8730 + i, sl, &v)) {
+                const double other = *crops[i ^ 1];
+                *crops[i] = std::max(0.0, std::min((double)v, 0.9 - other));
                 a.changed(true);
             }
-            char num[32];
-            snprintf(num, sizeof num, "%+.2f", *vals[i]);
-            sn_text(&ui, SN_F_TINY, num, sl.x + sl.width + 10, y - 2, SN_TEXT);
-            sn_text(&ui, SN_F_TINY, hints[i], r.x + 16, y + 12, SN_EDGE);
-            y += 34;
+            char num[16];
+            snprintf(num, sizeof num, "%s %.2f", names[i], *crops[i]);
+            sn_text(&a.ui, SN_F_TINY, num, sl.x, L.y + 16, SN_EDGE);
         }
+        L.y += 32;
+    }
+    L.gap(4);
+
+    L.label("OR JUST");
+    {
+        struct Preset { const char *name; double scale, x, y; };
+        static const Preset presets[4] = {{"FULL", 1.0, 0.0, 0.0},
+                                          {"LEFT HALF", 0.5, -1.0, 0.0},
+                                          {"RIGHT HALF", 0.5, 1.0, 0.0},
+                                          {"CORNER", 0.32, 1.0, -1.0}};
+        for (int i = 0; i < 4; i++) {
+            Rectangle b = {L.x + (i % 2) * (L.w * 0.5f + 3), L.y + (i / 2) * 26.0f,
+                           L.w * 0.5f - 3, 22};
+            if (sn_button(&a.ui, 8740 + i, b, presets[i].name, 1)) {
+                t->scaleX = t->scaleY = presets[i].scale;
+                t->stretch = false;
+                t->x = presets[i].x;
+                t->y = presets[i].y;
+                a.changed();
+            }
+        }
+        L.y += 56;
     }
 
-    /* Crop, as four numbers on one line: it is one idea, not four. */
-    label(a, "CROP  L R T B", r.x + 16, y);
-    double *crops[] = {&t->cropL, &t->cropR, &t->cropT, &t->cropB};
-    for (int i = 0; i < 4; i++) {
-        Rectangle sl = {r.x + 130 + i * 68.0f, y - 4, 56, 16};
-        float v = (float)*crops[i];
-        if (sn_slider(&ui, 8730 + i, sl, &v)) {
-            /* Two opposite crops that meet would leave nothing to draw. */
-            double other = (i < 2) ? *crops[i ^ 1] : *crops[(i ^ 1)];
-            *crops[i] = std::min((double)v, 0.9 - other);
-            if (*crops[i] < 0) *crops[i] = 0;
-            a.changed(true);
-        }
-        char num[16];
-        snprintf(num, sizeof num, "%.2f", *crops[i]);
-        sn_text(&ui, SN_F_TINY, num, sl.x + 14, y + 12, SN_EDGE);
-    }
-    y += 40;
-
-    /* --- the two layouts anybody actually wants --- */
-    label(a, "OR JUST", r.x + 16, y);
-    struct Preset {
-        const char *name;
-        double scale, x, y;
-    } presets[] = {
-        {"FULL", 1.0, 0.0, 0.0},   {"LEFT HALF", 0.5, -1.0, 0.0},
-        {"RIGHT HALF", 0.5, 1.0, 0.0}, {"CORNER", 0.32, 1.0, -1.0},
-    };
-    for (int i = 0; i < 4; i++) {
-        Rectangle b = {r.x + 130 + i * 96.0f, y - 6, 90, 22};
-        if (sn_button(&ui, 8740 + i, b, presets[i].name, 1)) {
-            t->scaleX = t->scaleY = presets[i].scale;
-            t->stretch = false;
-            t->x = presets[i].x;
-            t->y = presets[i].y;
-            a.changed();
-        }
-    }
-
-    Rectangle reset = {r.x + 16, r.y + r.height - 40, 88, 26};
-    Rectangle close = {r.x + r.width - 104, r.y + r.height - 40, 88, 26};
-    if (sn_button(&ui, 8750, reset, "RESET", t->transformed())) {
+    Rectangle reset = {L.x, L.y, L.w, 24};
+    if (sn_button(&a.ui, 8750, reset, "RESET THE LOT", t->transformed())) {
         t->resetTransform();
         a.changed();
     }
-    if (sn_button_lit(&ui, 8751, close, "DONE", 1) || IsKeyPressed(KEY_ESCAPE)) {
-        a.changed();
-        a.modal = MODAL_NONE;
+    L.y += 28;
+}
+
+/* --- one caption --- */
+static void inspect_text(App &a, Lane &L)
+{
+    Clip *c = a.proj.clip(a.textClip);
+    const Track *tr = a.proj.track(a.textClip.track);
+    if (!c || !tr || tr->kind != TRACK_TEXT) {
+        L.note("select a caption on the preview or the timeline");
+        return;
+    }
+    TextStyle &st = c->text;
+
+    L.title("CAPTION");
+    L.note("drag it on the preview to move it");
+    L.gap(6);
+
+    /* --- the words --- */
+    {
+        std::string line[3];
+        split_lines(st.text, line);
+
+        L.label("WORDS");
+        bool edited = false;
+        for (int i = 0; i < 3; i++) {
+            Rectangle f = {L.x, L.y + i * 24.0f, L.w, 21};
+            if (sn_field(&a.ui, 8800 + i, f, line[i], i == 0 ? "the caption" : ""))
+                edited = true;
+        }
+        if (edited) {
+            st.text = join_lines(line);
+            a.changed(true);
+        }
+        L.y += 24 * 3 + 4;
+    }
+
+    /* --- the face --- */
+    {
+        L.label("FONT");
+
+        const std::vector<FontEntry> &fonts = systemFonts();
+        std::string shown = st.font.empty() ? std::string("the one in the program")
+                                            : std::string();
+        if (shown.empty()) {
+            for (const FontEntry &f : fonts)
+                if (f.path == st.font) { shown = f.name; break; }
+            if (shown.empty()) shown = st.font;
+        }
+        Color nameCol = SN_TEXT;
+        if (textMissingFont(st)) {
+            nameCol = SN_AMBER;
+            shown += " - not on this machine";
+        }
+        sn_text_clip(&a.ui, SN_F_TINY, shown.c_str(), L.x, L.y, L.w - 72, nameCol);
+
+        Rectangle emb = {L.x + L.w - 68, L.y - 4, 68, 20};
+        if (sn_button(&a.ui, 8810, emb, "BUILT IN", !st.font.empty())) {
+            st.font.clear();
+            a.changed();
+        }
+        L.y += 20;
+
+        Rectangle filter = {L.x, L.y, L.w, 21};
+        sn_field(&a.ui, 8811, filter, g_fontFilter, "type to find a font");
+        L.y += 25;
+
+        std::vector<const FontEntry *> hit;
+        for (const FontEntry &f : fonts) {
+            if (g_fontFilter.empty()) { hit.push_back(&f); continue; }
+            std::string hay = f.name, ned = g_fontFilter;
+            for (char &ch : hay) ch = (char)tolower((unsigned char)ch);
+            for (char &ch : ned) ch = (char)tolower((unsigned char)ch);
+            if (hay.find(ned) != std::string::npos) hit.push_back(&f);
+        }
+
+        const int rows = 5;
+        Rectangle list = {L.x, L.y, L.w, rows * 18.0f};
+        DrawRectangleRec(list, SN_WELL);
+        DrawRectangleLinesEx(list, 1, SN_BORDER);
+
+        const int maxTop = std::max(0, (int)hit.size() - rows);
+        if (CheckCollisionPointRec(GetMousePosition(), list) && !sn_ui_blocked(&a.ui))
+            g_fontScroll -= GetMouseWheelMove() * 2.0f;
+        g_fontScroll = std::max(0.0f, std::min((float)maxTop, g_fontScroll));
+
+        const int top = (int)g_fontScroll;
+        for (int i = 0; i < rows && top + i < (int)hit.size(); i++) {
+            const FontEntry *f = hit[(size_t)(top + i)];
+            Rectangle row = {list.x + 1, list.y + 1 + i * 18.0f, list.width - 2, 17};
+            const bool over = CheckCollisionPointRec(GetMousePosition(), row) &&
+                              !sn_ui_blocked(&a.ui);
+            const bool mine = f->path == st.font;
+            if (mine) DrawRectangleRec(row, Color{0x2d, 0x5c, 0x8c, 140});
+            else if (over) DrawRectangleRec(row, SN_PANEL);
+            sn_text_clip(&a.ui, SN_F_TINY, f->name.c_str(), row.x + 5, row.y + 3,
+                         row.width - 10, mine ? SN_TEXT : SN_DIM);
+            if (over && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                st.font = f->path;
+                a.changed();
+            }
+        }
+        if (hit.empty())
+            sn_text(&a.ui, SN_F_TINY, "nothing matches", list.x + 5, list.y + 5, SN_EDGE);
+        L.y += list.height + 6;
+
+        char n[48];
+        snprintf(n, sizeof n, "%d of %d fonts", (int)hit.size(), (int)fonts.size());
+        L.note(n);
+    }
+    L.gap(4);
+
+    if (L.number(8820, "SIZE", &st.size, 0.01, 0.60, "%.3f")) a.changed(true);
+    if (L.number(8821, "TURN", &st.rotation, -180.0, 180.0, "%.0f")) {
+        if (std::fabs(st.rotation) < 2.0) st.rotation = 0.0;
+        a.changed(true);
+    }
+    if (L.number(8822, "OUTLINE", &st.outlineWidth, 0.0, 0.35, "%.3f")) a.changed(true);
+    if (L.number(8823, "LINE GAP", &st.lineSpacing, 0.8, 2.5, "%.2f")) a.changed(true);
+    L.gap(4);
+
+    L.label("ALIGN");
+    {
+        static const char *names[3] = {"LEFT", "CENTRE", "RIGHT"};
+        const float bw = (L.w - 8) / 3.0f;
+        for (int i = 0; i < 3; i++) {
+            Rectangle b = {L.x + i * (bw + 4), L.y, bw, 22};
+            if (sn_toggle(&a.ui, 8830 + i, b, names[i], st.align == i)) {
+                st.align = i;
+                a.changed();
+            }
+        }
+        L.y += 28;
+    }
+
+    if (colour_row(a, 8840, "FILL", &st.fill, L.x, L.y, L.w)) a.changed(true);
+    L.y += 46;
+    if (colour_row(a, 8850, "OUTLINE", &st.outline, L.x, L.y, L.w)) a.changed(true);
+    L.y += 46;
+}
+
+void inspectPane(App &a, Rectangle r)
+{
+    sn_ui &ui = a.ui;
+    if (r.width < 2) return;
+
+    DrawRectangleRec(r, SN_PANEL);
+    DrawLine((int)r.x, (int)r.y, (int)r.x, (int)(r.y + r.height), SN_BORDER);
+
+    /* --- the header: which page, the pin, and the way out --- */
+    Rectangle head = {r.x, r.y, r.width, 26};
+    DrawRectangleRec(head, SN_PANEL_HI);
+    sn_divider(head.x, head.y + head.height, head.width);
+
+    {
+        const float bw = (r.width - 70) * 0.5f;
+        Rectangle lt = {r.x + 6, head.y + 3, bw, 20};
+        Rectangle tt = {r.x + 10 + bw, head.y + 3, bw, 20};
+        if (sn_toggle(&ui, 8690, lt, "PICTURE", a.inspectPage == App::INSPECT_LAYOUT))
+            a.inspectPage = App::INSPECT_LAYOUT;
+        if (sn_toggle(&ui, 8691, tt, "CAPTION", a.inspectPage == App::INSPECT_TEXT))
+            a.inspectPage = App::INSPECT_TEXT;
+
+        Rectangle pin = {r.x + r.width - 52, head.y + 3, 22, 20};
+        if (sn_icon_button(&ui, 8692, pin, a.inspect.pinned ? SN_I_LOCK : SN_I_UNLOCK, 1,
+                           a.inspect.pinned,
+                           a.inspect.pinned ? "unpin it - it will close itself again"
+                                            : "pin it open"))
+            a.inspect.pinned = !a.inspect.pinned;
+
+        Rectangle shut = {r.x + r.width - 28, head.y + 3, 22, 20};
+        if (sn_icon_button(&ui, 8693, shut, SN_I_X, 1, 0, "close it")) {
+            a.inspect.open = false;
+            a.inspect.pinned = false;
+        }
+    }
+
+    /* --- the body, scrolled --- */
+    Rectangle body = {r.x, head.y + head.height + 1, r.width,
+                      r.height - head.height - 1};
+
+    BeginScissorMode((int)body.x, (int)body.y, (int)body.width, (int)body.height);
+    Lane L{&a, body.x + 10, body.width - 20, body.y + 8 - a.inspectScroll};
+    const float top = L.y;
+
+    if (a.inspectPage == App::INSPECT_TEXT) inspect_text(a, L);
+    else inspect_layout(a, L);
+
+    EndScissorMode();
+
+    const float want = L.y - top + 16;
+    if (CheckCollisionPointRec(GetMousePosition(), body) && !sn_ui_blocked(&ui))
+        a.inspectScroll -= GetMouseWheelMove() * 30.0f;
+    a.inspectScroll =
+        std::max(0.0f, std::min(a.inspectScroll, std::max(0.0f, want - body.height)));
+
+    /* A bar down the edge when there is more than fits, because a column that
+     * scrolls and never says so is a column somebody stops at the bottom of. */
+    if (want > body.height) {
+        const float f = body.height / want;
+        const float bh = std::max(20.0f, body.height * f);
+        const float by = body.y + (body.height - bh) *
+                                      (a.inspectScroll / std::max(1.0f, want - body.height));
+        DrawRectangle((int)(r.x + r.width - 4), (int)by, 3, (int)bh, SN_EDGE);
     }
 }
 
-/* ------------------------------------------------------------------ *
- * The canvas
- *
- * What the preview shows and what an export defaults to. It is set from the
- * first video dropped in, which is right nearly always and wrong exactly when
- * someone wants a shape none of their footage is - two videos side by side in
- * a wide frame, or a phone-shaped crop out of landscape.
- * ------------------------------------------------------------------ */
 
 void canvasDialog(App &a)
 {

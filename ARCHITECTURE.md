@@ -15,7 +15,7 @@ src/gui/      sn_gui.*        theme and widget set
               sn_player.*     the decode thread and the audio clock
               sn_bin.*        the media pane and its thumbnail worker
               sn_track.*      the timeline pane
-              sn_dialog.*     export, information, confirm, file browser
+              sn_dialog.*     the inspector, export, information, confirm
               sn_filedlg.*    the platform's own open/save dialogs
               sn_appmenu.*    the menu bar, and the list of what is in it
               *_mac.mm        the macOS halves of those two, in Objective-C++
@@ -249,6 +249,19 @@ codecs as they are — it falls back to rendering rather than reporting an error
 the user would have to understand to act on.
 
 ## The interface
+
+The media bin and the inspector are **drawers**: a tab at each edge, a column
+that slides out of it, a pin, and a five-second timeout when it is not pinned.
+The column takes its width from the middle of the window rather than covering
+it — a panel over the preview hides the thing being adjusted, which for the
+inspector is exactly the wrong half to hide.
+
+The inspector replaced two modal dialogs, and the reason is the same one: a
+window in the middle of the screen covers the picture *and* stops the
+transport, so checking what a change looks like a second later meant closing
+it, scrubbing, and opening it again. Everything in it lays out down one narrow
+lane, which is what makes narrow work — two columns of controls in three
+hundred pixels is two columns of six characters.
 
 Immediate mode, drawn with raylib, no toolkit. The BENCO look is flat fills,
 thin dim borders and small radii, which is what an immediate-mode renderer

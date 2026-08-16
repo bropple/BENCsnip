@@ -52,8 +52,6 @@ enum DragKind {
 enum Modal {
     MODAL_NONE = 0,
     MODAL_EXPORT,
-    MODAL_LAYOUT,     /* one track's size, position and crop        */
-    MODAL_TEXT,       /* what a caption says and how it looks       */
     MODAL_CANVAS,     /* the project's own size and frame rate      */
     MODAL_INFO,
     MODAL_HELP,       /* every control there is                     */
@@ -61,6 +59,32 @@ enum Modal {
     MODAL_SAVE,
     MODAL_LOAD,
     MODAL_CONFIRM
+};
+
+/* A panel that slides in from the edge of the window.
+ *
+ * The media bin and the inspector are the same thing on opposite sides: a tab
+ * at the edge, a column that comes out when it is asked for, and a pin for
+ * when somebody wants it to stay. Unpinned it closes itself a few seconds
+ * after the pointer leaves, because a panel that is only wanted for one
+ * adjustment should not have to be dismissed afterwards.
+ *
+ * The column takes its width from the middle of the window rather than
+ * covering it. A panel that overlays the preview hides the thing being
+ * adjusted, which for the inspector is exactly the wrong half to hide.
+ */
+struct Drawer {
+    bool open = false;
+    bool pinned = false;
+
+    /* How wide it is drawn right now, sliding towards where it should be.
+     * Animated because a column that appears between one frame and the next
+     * reads as the window having jumped rather than as a panel having
+     * opened. */
+    float w = 0;
+
+    /* When the pointer was last inside it, for the timeout. */
+    double touched = 0;
 };
 
 struct Thumb {
@@ -174,6 +198,20 @@ struct App {
     std::map<int, Thumb> thumbs;
     float binScroll = 0.0f;
 
+    /* --- the two drawers --- */
+    /* The bin starts open and pinned, which is where it has always been.
+     * A window that comes up with no media pane is a window that looks like
+     * it lost one; somebody who wants the room can unpin it and it will get
+     * out of the way by itself from then on. */
+    Drawer bin;             /* the media pane, on the left  */
+    Drawer inspect;         /* what is selected, on the right */
+
+    /* What the inspector is showing: a track's layout, or a caption. Set by
+     * whatever asked for it to open. */
+    enum InspectPage { INSPECT_LAYOUT = 0, INSPECT_TEXT };
+    int inspectPage = INSPECT_LAYOUT;
+    float inspectScroll = 0.0f;
+
     /* --- modals --- */
     Modal modal = MODAL_NONE;
     std::string confirmText;
@@ -246,6 +284,16 @@ struct App {
 
 /* --- the panes --- */
 void binPane(App &a, Rectangle r);
+void inspectPane(App &a, Rectangle r);
+
+/* One drawer's tab, at the edge of the window. Returns true when it was
+ * clicked. `left` says which edge it hangs on. */
+bool drawerTab(App &a, Drawer &d, Rectangle tab, sn_icon icon, const char *name,
+               bool left);
+
+/* Slide it towards where it should be, and close it when it has been left
+ * alone for long enough. `full` is how wide it is when open. */
+void drawerStep(App &a, Drawer &d, Rectangle r, float full, bool busy);
 void binShutdown(App &a);
 void timelinePane(App &a, Rectangle r);
 /* How long each part of starting up took, for the info window. Filled in by
@@ -269,8 +317,6 @@ const char *tarrLine(int which);
 
 /* --- modals --- */
 void exportDialog(App &a);
-void layoutDialog(App &a);          /* one track's size, position and crop */
-void textDialog(App &a);            /* what a caption says and how it looks */
 void helpDialog(App &a);            /* every control, in one table          */
 void canvasDialog(App &a);          /* the project's own size and rate     */
 void exportDialogPrepare(App &a);   /* call as the dialog opens */

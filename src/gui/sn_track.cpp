@@ -711,7 +711,10 @@ static void draw_heads(App &a)
             if (sn_icon_button(&ui, id + 4, b3, SN_I_CROP, 1, t.transformed(),
                                "size, position and crop for this track")) {
                 a.layoutTrack = (int)i;
-                a.modal = MODAL_LAYOUT;
+                a.inspectPage = App::INSPECT_LAYOUT;
+                a.inspectScroll = 0.0f;
+                a.inspect.open = true;
+                a.inspect.touched = GetTime();
             }
         }
 
@@ -1264,7 +1267,10 @@ void timelinePane(App &a, Rectangle r)
         sn_double_click(&ui, 5400 + overClip.clip)) {
         a.select(overClip, false);
         a.textClip = overClip;
-        a.modal = MODAL_TEXT;
+        a.inspectPage = App::INSPECT_TEXT;
+        a.inspectScroll = 0.0f;
+        a.inspect.open = true;
+        a.inspect.touched = GetTime();
     }
 
     /* --- right-click --- */

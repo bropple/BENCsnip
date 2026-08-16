@@ -11,6 +11,7 @@
  * moment the user is dropping ten more.
  */
 
+#include <cmath>
 #include "sn_app.h"
 
 #include <algorithm>
@@ -148,6 +149,71 @@ static void draw_audio_mark(Rectangle r, Color c)
     }
 }
 
+/* ------------------------------------------------------------------ *
+ * Drawers
+ *
+ * The tab at the edge and the slide. Both drawers use these; see the note on
+ * Drawer in sn_app.h for why there are two of the same thing.
+ * ------------------------------------------------------------------ */
+
+bool drawerTab(App &a, Drawer &d, Rectangle tab, sn_icon icon, const char *name,
+               bool left)
+{
+    sn_ui &ui = a.ui;
+
+    const bool hot = CheckCollisionPointRec(GetMousePosition(), tab) && !sn_ui_blocked(&ui);
+
+    DrawRectangleRec(tab, d.open ? SN_PANEL_HI : SN_PANEL);
+    DrawLine(left ? (int)(tab.x + tab.width) - 1 : (int)tab.x, (int)tab.y,
+             left ? (int)(tab.x + tab.width) - 1 : (int)tab.x,
+             (int)(tab.y + tab.height), SN_BORDER);
+
+    /* The icon a third of the way down rather than in the middle: the tab is
+     * the height of the window and a mark at its centre is a mark nobody
+     * looks at, because that is where the picture is. */
+    Rectangle ic = {tab.x + 2, tab.y + 26, tab.width - 4, tab.width - 4};
+    sn_draw_icon(icon, ic, d.open ? SN_TEXT : (hot ? SN_TEXT : SN_DIM));
+
+    /* The name down the tab, a letter to a line. Rotated text would be
+     * better and there is no rotated text here; stacked letters are what a
+     * sixteen pixel tab can hold and they read at a glance. */
+    float ly = ic.y + ic.height + 6;
+    for (const char *p = name; *p && ly < tab.y + tab.height - 10; p++, ly += 11) {
+        const char one[2] = {*p, 0};
+        sn_text_center(&ui, SN_F_TINY, one, tab.x + tab.width * 0.5f, ly,
+                       d.open ? SN_DIM : SN_EDGE);
+    }
+
+    if (hot) {
+        sn_tip(&ui, d.open ? "click to put it away" : "click to open it");
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            d.open = !d.open;
+            d.touched = GetTime();
+            return true;
+        }
+    }
+    return false;
+}
+
+void drawerStep(App &a, Drawer &d, Rectangle r, float full, bool busy)
+{
+    /* The pointer being in it, or a drag having started in it, is what keeps
+     * it open. The drag matters: pulling a file out of the bin ends up over
+     * the timeline, which is outside the drawer, and a panel that shut on the
+     * way past would take the drag with it. */
+    const bool inside = CheckCollisionPointRec(GetMousePosition(), r);
+    if (inside || busy || d.pinned) d.touched = GetTime();
+
+    if (d.open && !d.pinned && GetTime() - d.touched > 5.0) d.open = false;
+
+    /* Towards where it should be, a fraction of the remaining distance per
+     * frame, which is fast where it matters and slow where it lands. */
+    const float want = d.open ? full : 0.0f;
+    const float step = (want - d.w) * std::min(1.0f, GetFrameTime() * 14.0f);
+    d.w += step;
+    if (std::fabs(want - d.w) < 0.75f) d.w = want;
+}
+
 void binPane(App &a, Rectangle r)
 {
     thumb_collect(a);
@@ -163,10 +229,23 @@ void binPane(App &a, Rectangle r)
     DrawRectangleRec(head, SN_PANEL);
     sn_text_spaced(&ui, SN_F_SMALL, "MEDIA", head.x + SN_PAD, head.y + 5, SN_DIM);
 
-    Rectangle addB = {head.x + head.width - 26, head.y + 3, 20, 20};
+    Rectangle addB = {head.x + head.width - 74, head.y + 3, 20, 20};
     if (sn_icon_button(&ui, 9001, addB, SN_I_PLUS, 1, 0, "add files to the bin")) {
         a.modal = MODAL_OPEN;
         fileDialogOpen(".", "");
+    }
+
+    Rectangle pin = {head.x + head.width - 50, head.y + 3, 20, 20};
+    if (sn_icon_button(&ui, 9002, pin, a.bin.pinned ? SN_I_LOCK : SN_I_UNLOCK, 1,
+                       a.bin.pinned,
+                       a.bin.pinned ? "unpin it - it will close itself again"
+                                    : "pin it open"))
+        a.bin.pinned = !a.bin.pinned;
+
+    Rectangle shut = {head.x + head.width - 26, head.y + 3, 20, 20};
+    if (sn_icon_button(&ui, 9003, shut, SN_I_X, 1, 0, "close it")) {
+        a.bin.open = false;
+        a.bin.pinned = false;
     }
     sn_divider(r.x, head.y + head.height, r.width);
 
