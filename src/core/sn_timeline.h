@@ -219,15 +219,24 @@ struct Track {
      *          left. */
     double scaleX = 1.0, scaleY = 1.0;
     bool stretch = false;
+
+    /* Mirrored left to right, and top to bottom.
+     *
+     * Not an effect on the lane, because it is not a thing that happens over
+     * a stretch of time - it is which way round the picture faces, which is
+     * part of the layout in the same way the crop is. A clip that needs to
+     * flip halfway through is two clips. */
+    bool flipH = false, flipV = false;
     double x = 0.0, y = 0.0;
     double cropL = 0.0, cropR = 0.0, cropT = 0.0, cropB = 0.0;
 
     const Clip *at(double t) const;
     Clip *at(double t);
 
-    /* Whether this track is doing anything but filling the canvas. The
-     * renderer takes a shorter path when it is not, and the interface says
-     * so rather than making someone read four numbers to find out. */
+    /* Whether this track is doing anything but filling the canvas, the right
+     * way round. The renderer takes a shorter path when it is not, and the
+     * interface says so rather than making someone read six numbers and two
+     * switches to find out. */
     bool transformed() const;
     void resetTransform();
 };

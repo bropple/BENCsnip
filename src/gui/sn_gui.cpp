@@ -18,6 +18,15 @@ Color SN_PANEL_HI = {0x22, 0x2c, 0x18, 255};
 Color SN_BORDER = {0x2a, 0x3a, 0x1e, 255};
 Color SN_TEXT = {0xcd, 0xea, 0xb0, 255};
 Color SN_DIM = {0x8a, 0xa8, 0x78, 255};
+/* What the status line says when it is explaining rather than reporting.
+ *
+ * It was SN_DIM, which is the colour for text you are not meant to read unless
+ * you go looking - a unit beside a number, a hint under a slider. A tooltip is
+ * the opposite: it is the answer to a question somebody is asking right now by
+ * holding the pointer still, and on a near-black bar at nine pixels it was too
+ * dark to read at a glance. Brighter than DIM and still short of TEXT, so a
+ * message the program chose to tell you still reads as the louder of the two. */
+Color SN_TIP = {0xa8, 0xcf, 0x84, 255};
 Color SN_ACCENT = {0x78, 0xb9, 0x46, 255};
 Color SN_EDGE = {0x3f, 0x5c, 0x28, 255};
 Color SN_ALERT = {0xd8, 0x4a, 0x3a, 255};
@@ -505,6 +514,16 @@ void sn_draw_icon(sn_icon which, Rectangle r, Color c)
         DrawRing(Vector2{cx, cy}, 0.5f * s - th * 0.5f, 0.5f * s + th * 0.5f, 20, 320,
                  28, c);
         tri(V(0.28f, -0.72f), V(0.92f, -0.52f), V(0.42f, -0.06f));
+        break;
+    case SN_I_HELP:
+        /* A question mark: the hook, and the dot under it. Drawn from a ring
+         * with a gap rather than from a curve, because there is no curve
+         * primitive here and three quarters of a ring is the shape of the
+         * hook anyway. */
+        DrawRing(Vector2{cx, cy - 0.34f * s}, 0.40f * s - th * 0.5f,
+                 0.40f * s + th * 0.5f, 145, 400, 28, c);
+        bar(-0.11f, 0.04f, 0.22f, 0.30f);
+        bar(-0.11f, 0.50f, 0.22f, 0.24f);
         break;
     case SN_I_TEXT:
         /* A serifed capital T: the crossbar, the stem, and a foot. Plain

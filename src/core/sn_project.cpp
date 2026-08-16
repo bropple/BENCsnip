@@ -170,9 +170,9 @@ bool saveProject(const Project &p, const std::string &path, std::string *err)
          * a line it does not recognise; one that had to parse four more
          * numbers before the track's name would read the name as a number. */
         if (t.transformed())
-            fprintf(f, "xform %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %d\n", t.scaleX,
-                    t.x, t.y, t.cropL, t.cropR, t.cropT, t.cropB, t.scaleY,
-                    t.stretch ? 1 : 0);
+            fprintf(f, "xform %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %d %d %d\n",
+                    t.scaleX, t.x, t.y, t.cropL, t.cropR, t.cropT, t.cropB, t.scaleY,
+                    t.stretch ? 1 : 0, t.flipH ? 1 : 0, t.flipV ? 1 : 0);
 
         /* Its own line for the same reason, and only when it is not unity, so
          * that a project nobody has touched the levels of is byte for byte the
@@ -312,15 +312,17 @@ bool loadProject(Project *out, const std::string &path, std::string *err)
         } else if (!strncmp(line, "xform ", 6)) {
             if (trackAt < 0) continue;
             Track &t = p.tracks[trackAt];
-            int stretch = 0;
-            /* The last two arrived later. A file written before they existed
-             * has one scale for both axes and no stretching, which is what
-             * these defaults say. */
-            const int got = sscanf(line + 6, "%lf %lf %lf %lf %lf %lf %lf %lf %d",
+            int stretch = 0, fh = 0, fv = 0;
+            /* The last four arrived later, in two goes. A file written before
+             * any of them has one scale for both axes, no stretching and no
+             * mirrors, which is what these defaults say. */
+            const int got = sscanf(line + 6, "%lf %lf %lf %lf %lf %lf %lf %lf %d %d %d",
                                    &t.scaleX, &t.x, &t.y, &t.cropL, &t.cropR, &t.cropT,
-                                   &t.cropB, &t.scaleY, &stretch);
+                                   &t.cropB, &t.scaleY, &stretch, &fh, &fv);
             if (got < 8) t.scaleY = t.scaleX;
             t.stretch = stretch != 0;
+            t.flipH = fh != 0;
+            t.flipV = fv != 0;
         } else if (!strncmp(line, "fxp ", 4)) {
             if (trackAt < 0) continue;
             FxPoint x;

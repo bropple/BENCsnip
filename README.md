@@ -64,11 +64,12 @@ middle piece and press **Shift+Delete**. Then **Ctrl+E**.
   at once — **the top row is the back of the picture and the bottom row is in
   front**, which is upside down compared to most editors and is what this one
   was asked for.
-* **A layout per video track.** Size, position and crop, relative to the
-  canvas, so a small video can play in the corner of a big one or two can sit
+* **A layout per video track.** Size, position, crop and mirrors, relative to
+  the canvas, so a small video can play in the corner of a big one or two can sit
   side by side. There are presets for the layouts anyone actually wants. The
   canvas itself — size and frame rate — is a button in the toolbar, so a
-  vertical or square project is two clicks.
+  vertical or square project is two clicks. **?** in the toolbar lists every
+  control there is.
 * **Text on the picture.** Ctrl+T puts a caption at the playhead. Drag it
   about on the preview, drag a corner to resize it, and drag the handle above
   it to turn it — upright is sticky, and Shift steps by fifteen degrees. Fill
@@ -166,9 +167,10 @@ drag the line across an audio clip to change its level — it snaps back to 0 dB
 on the way past. Fades live on the effects lane under each track: click to add
 a point, drag it about, and right-click for presets or to delete one. Only the
 ruler moves the playhead. The pointer's shape says which of those you are about to do.
-The ruler scrubs. The wheel scrolls; Ctrl or Shift with it zooms; Alt with it,
-or the wheel over the track heads, scrolls the tracks; the middle button pans.
-There are scrollbars for both. Right-click a clip for the rest. Delete with
+The ruler scrubs, and it is the only thing that moves the playhead. The wheel
+scrolls the tracks, Shift with it scrolls sideways, Ctrl zooms, and a sideways
+swipe on a trackpad scrolls sideways; the middle button pans. There are
+scrollbars for both. Right-click a clip for the rest. Delete with
 nothing selected closes the gap the playhead is sitting in. Double-click the
 project's name in the toolbar to change it — the export is named after it.
 

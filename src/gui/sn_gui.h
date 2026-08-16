@@ -41,6 +41,7 @@ extern Color SN_VISOR;
  * one glance says "picture" or "sound" without reading anything. The two are
  * roster colours - P. Gon's blue for video, R. Triy's green for audio - kept
  * dark enough that white-ish text sits on them legibly. */
+extern Color SN_TIP;
 extern Color SN_CLIP_V, SN_CLIP_V_HI, SN_CLIP_V_EDGE;
 extern Color SN_CLIP_A, SN_CLIP_A_HI, SN_CLIP_A_EDGE;
 extern Color SN_CLIP_T, SN_CLIP_T_HI, SN_CLIP_T_EDGE;
@@ -178,7 +179,7 @@ typedef enum {
     SN_I_EXPORT, SN_I_UNDO, SN_I_REDO, SN_I_EYE, SN_I_EYE_OFF, SN_I_SPEAKER,
     SN_I_MUTE, SN_I_LOCK, SN_I_UNLOCK, SN_I_ZOOM_IN, SN_I_ZOOM_OUT, SN_I_FIT,
     SN_I_LINK, SN_I_UNLINK, SN_I_INFO, SN_I_X, SN_I_CHECK, SN_I_SNAP,
-    SN_I_UP, SN_I_DOWN, SN_I_CROP, SN_I_LOOP, SN_I_TEXT
+    SN_I_UP, SN_I_DOWN, SN_I_CROP, SN_I_LOOP, SN_I_TEXT, SN_I_HELP
 } sn_icon;
 
 /* A filled triangle whichever way round its points are given.

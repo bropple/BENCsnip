@@ -682,6 +682,55 @@ static void test_render()
     CHECK(f.valid(), "past the end still returns a frame");
     CHECK(f.rgba[0] == 0 && f.rgba[1] == 0 && f.rgba[2] == 0, "and it is black");
 
+    /* --- the mirrors ---
+     *
+     * The test footage is colour bars, so which colour is on the left is the
+     * whole question. Read a pixel from the left third and one from the right
+     * third and check they swap.
+     */
+    {
+        auto at = [&](const sn::VideoFrame &f, int x, int y) {
+            return f.rgba.data() + ((size_t)y * f.w + x) * 4;
+        };
+
+        sn::VideoFrame plain, mirrored;
+        CHECK(r.videoAt(1.0, 160, 90, &plain), "a frame to mirror");
+
+        const uint8_t l0 = at(plain, 20, 45)[0], l1 = at(plain, 20, 45)[1];
+        const uint8_t r0 = at(plain, 139, 45)[0], r1 = at(plain, 139, 45)[1];
+        CHECK(l0 != r0 || l1 != r1, "the two sides differ to begin with");
+
+        p.tracks[0].flipH = true;
+        CHECK(r.videoAt(1.0, 160, 90, &mirrored), "and mirrored");
+        p.tracks[0].flipH = false;
+
+        CHECK(at(mirrored, 20, 45)[0] == r0 && at(mirrored, 20, 45)[1] == r1,
+              "what was on the right is on the left");
+        CHECK(at(mirrored, 139, 45)[0] == l0 && at(mirrored, 139, 45)[1] == l1,
+              "and what was on the left is on the right");
+
+        /* Up and down, on a source whose top and bottom differ - the bars
+         * have a timecode strip along the top of them. */
+        const uint8_t t0 = at(plain, 80, 6)[0], b0 = at(plain, 80, 83)[0];
+        p.tracks[0].flipV = true;
+        sn::VideoFrame upside;
+        CHECK(r.videoAt(1.0, 160, 90, &upside), "and turned upside down");
+        p.tracks[0].flipV = false;
+        if (t0 != b0) {
+            CHECK(at(upside, 80, 6)[0] == b0 && at(upside, 80, 83)[0] == t0,
+                  "top and bottom swap");
+        }
+
+        /* A track with a mirror on it counts as transformed, or the interface
+         * would not say so and RESET would not offer to undo it. */
+        sn::Track probe;
+        CHECK(!probe.transformed(), "an untouched track is untouched");
+        probe.flipH = true;
+        CHECK(probe.transformed(), "one with a mirror is not");
+        probe.resetTransform();
+        CHECK(!probe.flipH && !probe.transformed(), "and reset takes it off again");
+    }
+
     /* --- a ramp on the effects lane fades the picture ---
      *
      * Measured as the mean brightness of the frame, which is the one number
@@ -1016,6 +1065,7 @@ static void test_project()
 
     p.tracks[ai].clips[0].gain = 0.5;
     p.tracks[ai].gain = 0.75;
+    p.tracks[vi].flipH = true;
     sn::fxPreset(p.tracks[vi], sn::FX_FADE_IN, 0.25, 1.75);
     p.tracks[vi].fx.push_back(sn::FxPoint{4.00, 1.0, true});
     p.tracks[vi].fx.push_back(sn::FxPoint{4.50, 0.0, false});
@@ -1057,6 +1107,7 @@ static void test_project()
     CHECK(!q.dirty, "a project just loaded is not dirty");
 
     /* The effects lane, both ramps and which way round they go. */
+    CHECK(q.tracks[vi].flipH && !q.tracks[vi].flipV, "the mirror came back");
     CHECK(q.tracks[vi].fx.size() == 4, "all four points came back, got %d",
           (int)q.tracks[vi].fx.size());
     if (q.tracks[vi].fx.size() == 4) {

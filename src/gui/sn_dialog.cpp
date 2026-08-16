@@ -929,6 +929,142 @@ void textDialog(App &a)
     }
 }
 
+/* ------------------------------------------------------------------ *
+ * The controls
+ *
+ * Every control this program has, in one table.
+ *
+ * One table rather than prose, and in the program rather than only in the
+ * README, because the README is not open when somebody is wondering what the
+ * key for the thing is. It is one array so that adding a control means adding
+ * a row: two lists of the same facts drift apart, and the one nobody is
+ * looking at is always the wrong one.
+ *
+ * A row with no key is a heading. A row with no text is a blank line.
+ * ------------------------------------------------------------------ */
+
+namespace {
+
+struct HelpRow {
+    const char *key;
+    const char *what;
+};
+
+const HelpRow HELP[] = {
+    {nullptr, "PLAYING"},
+    {"Space", "play or pause"},
+    {"Home / End", "to the beginning, or the end"},
+    {"< and >", "to the previous cut, or the next"},
+    {"arrows", "one frame; hold Shift for a second"},
+    {"", nullptr},
+
+    {nullptr, "FILES"},
+    {"Ctrl+N", "start again"},
+    {"Ctrl+O", "open a project"},
+    {"Ctrl+S", "save it; Ctrl+Shift+S to save it somewhere else"},
+    {"Ctrl+I", "add media to the bin"},
+    {"Ctrl+E", "export"},
+    {"drop a file", "on the window to import it; drop a .bencsnip to open it"},
+    {"", nullptr},
+
+    {nullptr, "EDITING"},
+    {"S", "split every track at the playhead"},
+    {"Delete", "delete the selected clip - Backspace does it too"},
+    {"Shift+Delete", "delete it and close the gap"},
+    {"M", "mute the selected clip"},
+    {"Ctrl+Z", "undo; Ctrl+Shift+Z to redo"},
+    {"Ctrl+A", "select everything; Esc to select nothing"},
+    {"Ctrl+T", "put a caption at the playhead"},
+    {"", nullptr},
+
+    {nullptr, "THE VIEW"},
+    {"F", "fit the whole timeline in the window"},
+    {"+ and -", "zoom in and out"},
+    {"wheel", "scroll the tracks; Shift for sideways, Ctrl to zoom"},
+    {"middle-drag", "pan sideways"},
+    {"F12", "write a screenshot beside the program"},
+    {"", nullptr},
+
+    {nullptr, "THE TIMELINE, WITH THE MOUSE"},
+    {"click a clip", "select it; Shift adds to the selection"},
+    {"drag its middle", "move it, to another track if you like"},
+    {"drag an edge", "trim it - past the end of the source to loop it"},
+    {"the ruler", "scrub. It is the only thing that moves the playhead"},
+    {"right-click", "split, delete, mute, unlink, split channels"},
+    {"double-click", "a caption, for the window with the words in it"},
+    {"", nullptr},
+
+    {nullptr, "THE EFFECTS LANE, UNDER EVERY TRACK"},
+    {"click", "add a point; drag it to say when and how much"},
+    {"Shift+drag", "mark out a stretch for a preset to cover"},
+    {"right-click", "fade in, fade out, in and out, pulse, wave"},
+    {"", "and to hold a point, delete it, or clear the lane"},
+    {"", "a held point steps instead of sliding - that is a square wave"},
+    {"", nullptr},
+
+    {nullptr, "THE PREVIEW"},
+    {"click a layer", "select it; drag it about; drag a corner to resize"},
+    {"Tab", "the next layer down, where several overlap"},
+    {"double-click", "the numbers for it - crop, size, position, mirrors"},
+    {"R", "turn the selected caption 15 degrees; Shift+R the other way"},
+    {"C", "crop and layout for the selected picture"},
+    {"the ball", "above a selected caption turns it; Shift steps by 15"},
+    {"", nullptr},
+
+    {nullptr, "TRACKS"},
+    {"+V  +A", "add a video or an audio track. New ones go below"},
+    {"the arrows", "move a track up or down. The top row is the BACK"},
+    {"the switches", "hide or mute it, lock it, crop it, delete it"},
+    {"the fader", "an audio track's level, on top of each clip's"},
+};
+
+float g_helpScroll = 0;
+
+} /* namespace */
+
+void helpDialog(App &a)
+{
+    sn_ui &ui = a.ui;
+
+    Rectangle r = modal_frame(a, "CONTROLS", 620, 560);
+    Rectangle body = {r.x + 10, r.y + 36, r.width - 20, r.height - 36 - 48};
+    sn_panel(body, SN_WELL, SN_BORDER);
+
+    const int n = (int)(sizeof HELP / sizeof HELP[0]);
+    const float rowH = 15.0f;
+    const float want = n * rowH + 16;
+
+    if (CheckCollisionPointRec(GetMousePosition(), body) && !sn_ui_blocked(&ui))
+        g_helpScroll -= GetMouseWheelMove() * 40.0f;
+    g_helpScroll = std::max(0.0f, std::min(g_helpScroll, std::max(0.0f, want - body.height)));
+
+    BeginScissorMode((int)body.x, (int)body.y, (int)body.width, (int)body.height);
+    float ly = body.y + 8 - g_helpScroll;
+    for (int i = 0; i < n; i++) {
+        const HelpRow &row = HELP[i];
+
+        if (ly > body.y - rowH && ly < body.y + body.height) {
+            if (!row.key) {
+                sn_text_spaced(&ui, SN_F_TINY, row.what, body.x + 8, ly, SN_ACCENT);
+            } else if (row.what) {
+                if (row.key[0])
+                    sn_text(&ui, SN_F_TINY, row.key, body.x + 14, ly, SN_TEXT);
+                sn_text_clip(&ui, SN_F_TINY, row.what, body.x + 150, ly,
+                             body.width - 160, row.key[0] ? SN_DIM : SN_EDGE);
+            }
+        }
+        ly += row.what || row.key ? rowH : rowH * 0.6f;
+    }
+    EndScissorMode();
+
+    sn_text(&ui, SN_F_TINY, "scroll for the rest", r.x + 12, r.y + r.height - 34,
+            SN_EDGE);
+
+    Rectangle close = {r.x + r.width - 104, r.y + r.height - 40, 88, 26};
+    if (sn_button_lit(&ui, 8900, close, "DONE", 1) || IsKeyPressed(KEY_ESCAPE))
+        a.modal = MODAL_NONE;
+}
+
 void layoutDialog(App &a)
 {
     sn_ui &ui = a.ui;
@@ -987,12 +1123,21 @@ void layoutDialog(App &a)
     /* --- the numbers --- */
     float y = canvas.y + ph + 16;
 
-    /* The lock decides whether SIZE is one number or two. Locked is the
+    /* --- the switches, on a row of their own ---
+     *
+     * The lock decides whether SIZE is one number or two. Locked is the
      * common case by a mile, so it is one slider until somebody says
      * otherwise - two sliders that always have to be dragged together are
-     * two chances to get it slightly wrong. */
+     * two chances to get it slightly wrong.
+     *
+     * It used to sit at the right-hand end of the SIZE row, at the exact x
+     * that row writes its value at, so "1.00" was printed underneath the
+     * button and read as a squashed letter inside the word ASPECT. Its own
+     * row, and the mirrors beside it, because none of the three is a number
+     * and a row of numbers is not where a switch belongs.
+     */
     {
-        Rectangle lock = {r.x + 400, y - 6, 144, 22};
+        Rectangle lock = {r.x + 130, y - 6, 144, 22};
         if (sn_toggle(&ui, 8710, lock, t->stretch ? "FREE" : "ASPECT LOCKED",
                       !t->stretch)) {
             t->stretch = !t->stretch;
@@ -1003,6 +1148,25 @@ void layoutDialog(App &a)
             sn_tip(&ui, t->stretch
                             ? "the picture fills the box and may distort"
                             : "the picture keeps its shape inside the box");
+
+        Rectangle fh = {r.x + 288, y - 6, 118, 22};
+        if (sn_toggle(&ui, 8711, fh, "MIRROR L-R", t->flipH)) {
+            t->flipH = !t->flipH;
+            a.changed();
+        }
+        if (CheckCollisionPointRec(GetMousePosition(), fh) && !sn_ui_blocked(&ui))
+            sn_tip(&ui, "swap left and right - what a mirror does to it");
+
+        Rectangle fv = {r.x + 414, y - 6, 118, 22};
+        if (sn_toggle(&ui, 8712, fv, "MIRROR U-D", t->flipV)) {
+            t->flipV = !t->flipV;
+            a.changed();
+        }
+        if (CheckCollisionPointRec(GetMousePosition(), fv) && !sn_ui_blocked(&ui))
+            sn_tip(&ui, "turn it upside down");
+
+        label(a, "PICTURE", r.x + 16, y);
+        y += 32;
     }
 
     if (!t->stretch) {

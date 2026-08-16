@@ -56,6 +56,7 @@ enum Modal {
     MODAL_TEXT,       /* what a caption says and how it looks       */
     MODAL_CANVAS,     /* the project's own size and frame rate      */
     MODAL_INFO,
+    MODAL_HELP,       /* every control there is                     */
     MODAL_OPEN,       /* the file browser, importing            */
     MODAL_SAVE,
     MODAL_LOAD,
@@ -270,6 +271,7 @@ const char *tarrLine(int which);
 void exportDialog(App &a);
 void layoutDialog(App &a);          /* one track's size, position and crop */
 void textDialog(App &a);            /* what a caption says and how it looks */
+void helpDialog(App &a);            /* every control, in one table          */
 void canvasDialog(App &a);          /* the project's own size and rate     */
 void exportDialogPrepare(App &a);   /* call as the dialog opens */
 /* The project was renamed: the suggested output filename follows it, unless

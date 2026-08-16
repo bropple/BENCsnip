@@ -231,12 +231,21 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
          * see-through, or is fading, or hangs off the side, it takes the
          * general path instead. */
         const int rsx0 = cx + (x0 - ox), rsx1 = cx + (x1 - ox);
+
+        /* A left-to-right mirror reads each row backwards, which a memcpy
+         * cannot do; it takes the general path instead. Top to bottom only
+         * changes which row is read, so that one keeps the fast path. */
         const bool solid = fade >= 255 && s->videoOpaque() && rsx0 >= 0 &&
-                           rsx1 <= layer.w;
+                           rsx1 <= layer.w && !tr.flipH;
         const size_t rowBytes = (size_t)(x1 - x0) * 4;
 
         for (int y = y0; y < y1; y++) {
-            const int sy = cy + (y - oy);
+            /* The mirrors are taken inside the kept region rather than inside
+             * the whole decoded picture: what is being turned round is the
+             * part that is on screen, so cropping the left of a shot and then
+             * mirroring it puts that same part on the right. Doing it the
+             * other way round would slide the picture as well as flip it. */
+            const int sy = tr.flipV ? cy + (fh - 1 - (y - oy)) : cy + (y - oy);
             if (sy < 0 || sy >= layer.h) continue;
 
             uint8_t *d = m_canvas.data() + ((size_t)y * w + x0) * 4;
@@ -248,7 +257,7 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
             }
 
             for (int x = x0; x < x1; x++, d += 4) {
-                const int sx = cx + (x - ox);
+                const int sx = tr.flipH ? cx + (fw - 1 - (x - ox)) : cx + (x - ox);
                 if (sx < 0 || sx >= layer.w) continue;
                 const uint8_t *p = ss + (size_t)sx * 4;
 

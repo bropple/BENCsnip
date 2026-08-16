@@ -1276,7 +1276,13 @@ static void toolbar(App &a, Rectangle r)
         a.modal = a.modal == MODAL_INFO ? MODAL_NONE : MODAL_INFO;
     }
 
-    Rectangle exp = {info.x - 92, y, 86, bh};
+    Rectangle help = {info.x - 30, y, bw, bh};
+    if (sn_icon_button(&ui, 26, help, SN_I_HELP, 1, a.modal == MODAL_HELP,
+                       "every control there is")) {
+        a.modal = a.modal == MODAL_HELP ? MODAL_NONE : MODAL_HELP;
+    }
+
+    Rectangle exp = {help.x - 92, y, 86, bh};
     if (sn_button_lit(&ui, 22, exp, "EXPORT", a.proj.duration() > 0)) cmd_export(a);
 
     /* --- the project's name ---
@@ -2073,7 +2079,7 @@ static int run(int argc, char **argv)
                               : a.ui.tip[0]              ? a.ui.tip
                                                          : "";
             sn_text(&a.ui, SN_F_TINY, msg, rStatus.x + 8, rStatus.y + 5,
-                    fresh && a.statusBad ? SN_ALERT : (fresh ? SN_TEXT : SN_DIM));
+                    fresh && a.statusBad ? SN_ALERT : (fresh ? SN_TEXT : SN_TIP));
 
             char right[128];
             snprintf(right, sizeof right, "%dx%d  %.2f fps  %d clip%s", a.proj.width,
@@ -2098,6 +2104,7 @@ static int run(int argc, char **argv)
         case MODAL_EXPORT: exportDialog(a); break;
         case MODAL_LAYOUT: layoutDialog(a); break;
         case MODAL_TEXT:   textDialog(a); break;
+        case MODAL_HELP:   helpDialog(a); break;
         case MODAL_CANVAS: canvasDialog(a); break;
         case MODAL_INFO: infoWindow(a); break;
         case MODAL_CONFIRM: confirmDialog(a); break;

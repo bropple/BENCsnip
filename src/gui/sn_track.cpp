@@ -766,24 +766,36 @@ void timelinePane(App &a, Rectangle r)
 
     DrawRectangleRec(r, SN_WELL);
 
-    /* --- wheel: scroll, or zoom with a modifier --- */
+    /* --- the wheel ---
+     *
+     * The way every other window on the machine behaves: the wheel scrolls
+     * down the thing you are looking at, Shift scrolls it sideways, Control
+     * zooms. It used to scroll sideways unmodified, with the track list on
+     * Alt, on the theory that a timeline is mostly a horizontal object; what
+     * that cost was every attempt to reach the eighth track, which moved time
+     * instead and looked like the scroll had failed.
+     *
+     * The two-axis reading matters on a trackpad. A sideways swipe arrives as
+     * x rather than as y-with-Shift, and a Mac trackpad does that constantly -
+     * ignoring it makes the gesture do nothing at all, which reads as the
+     * program being broken rather than as a shortcut being missing.
+     */
     if (inside) {
-        const float w = GetMouseWheelMove();
-        if (w != 0) {
-            if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) {
-                zoomTo(a, a.timeAt(m.x), a.zoom * (w > 0 ? 1.25 : 0.8));
-            } else if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
-                zoomTo(a, a.timeAt(m.x), a.zoom * (w > 0 ? 1.25 : 0.8));
-            } else if (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT) ||
-                       m.x < r.x + HEAD_W) {
-                /* Over the heads, or with Alt held: the wheel moves the track
-                 * list rather than time. */
-                a.trackScroll -= w * 40.0f;
-            } else {
-                a.scroll -= w * 60.0 / a.zoom;
+        const Vector2 wv = GetMouseWheelMoveV();
+        const bool ctrl = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+        const bool shift = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+
+        if (ctrl && wv.y != 0) {
+            zoomTo(a, a.timeAt(m.x), a.zoom * (wv.y > 0 ? 1.25 : 0.8));
+        } else {
+            /* Sideways: Shift and the wheel, or a sideways swipe. */
+            const float side = shift ? wv.y : wv.x;
+            if (side != 0) {
+                a.scroll -= side * 60.0 / a.zoom;
                 if (a.scroll < 0) a.scroll = 0;
                 a.follow = false;
             }
+            if (!shift && wv.y != 0) a.trackScroll -= wv.y * 40.0f;
         }
         /* Middle-drag pans, which is the one gesture every timeline in the
          * world shares. */

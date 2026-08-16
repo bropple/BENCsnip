@@ -56,14 +56,15 @@ double Track::fxAt(double t) const
 bool Track::transformed() const
 {
     return std::fabs(scaleX - 1.0) > 1e-6 || std::fabs(scaleY - 1.0) > 1e-6 ||
-           stretch || std::fabs(x) > 1e-6 || std::fabs(y) > 1e-6 || cropL > 1e-6 ||
-           cropR > 1e-6 || cropT > 1e-6 || cropB > 1e-6;
+           stretch || flipH || flipV || std::fabs(x) > 1e-6 || std::fabs(y) > 1e-6 ||
+           cropL > 1e-6 || cropR > 1e-6 || cropT > 1e-6 || cropB > 1e-6;
 }
 
 void Track::resetTransform()
 {
     scaleX = scaleY = 1.0;
     stretch = false;
+    flipH = flipV = false;
     x = y = 0.0;
     cropL = cropR = cropT = cropB = 0.0;
 }
