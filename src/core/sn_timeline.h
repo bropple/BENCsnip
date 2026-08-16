@@ -241,6 +241,32 @@ struct Track {
     void resetTransform();
 };
 
+/* --- where a track's picture lands ------------------------------------ *
+ *
+ * The rectangle the picture fills on the canvas, and the way to put it
+ * somewhere else. Both here, and both used by the renderer and by the preview,
+ * because the two used to work this out separately and a duplicated layout is
+ * a layout that eventually disagrees with itself. The captions had exactly
+ * that fault: the preview inverted the placement by hand, the placement
+ * changed, and a caption jumped the moment it was grabbed. This is the same
+ * shape of thing, kept in one place before it does the same.
+ *
+ * In canvas pixels. `srcW`/`srcH` are the source's display size before the
+ * crop, which is applied here - it changes the shape that gets fitted, so a
+ * 16:9 source cropped to its middle third is a 16:3 layer.
+ * ------------------------------------------------------------------- */
+
+struct LayerRect {
+    double x = 0, y = 0, w = 0, h = 0;
+};
+
+LayerRect trackLayerRect(const Track &t, double srcW, double srcH, double canvasW,
+                         double canvasH);
+
+/* Scale and position together, so the picture ends up filling `r`. The inverse
+ * of the above, and next to it for that reason. */
+void trackSetLayerRect(Track *t, const LayerRect &r, double canvasW, double canvasH);
+
 /* Where a clip lives, for the GUI's selection. Either half being negative
  * means "nothing". */
 struct ClipRef {

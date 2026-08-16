@@ -368,29 +368,23 @@ void previewPane(App &a, Rectangle r)
         /* Where a track's picture is on the canvas, in canvas units. The same
          * arithmetic the renderer does - if these two ever disagree, what you
          * drag is not what gets written. */
+        /* Where a track's picture is on the canvas, in canvas units.
+         *
+         * trackLayerRect works it out, and the renderer calls the same
+         * function - so what you drag is what gets written, rather than two
+         * pieces of arithmetic that agree until one of them is edited. */
         auto layerRect = [&](const Track &t) {
             double sw = 16, sh = 9;
             for (const Clip &c : t.clips) {
                 const BinItem *b = a.proj.item(c.source);
                 if (b && b->info.hasVideo) {
-                    sw = b->info.dispW() * std::max(0.02, 1.0 - t.cropL - t.cropR);
-                    sh = b->info.dispH() * std::max(0.02, 1.0 - t.cropT - t.cropB);
+                    sw = b->info.dispW();
+                    sh = b->info.dispH();
                     break;
                 }
             }
-            const double W = a.proj.width, H = a.proj.height;
-            const double boxW = W * std::max(0.01, t.scaleX);
-            const double boxH = H * std::max(0.01, t.scaleY);
-
-            double lw = boxW, lh = boxH;
-            if (!t.stretch) {
-                const double sa = sw / sh, ba = boxW / boxH;
-                lw = sa > ba ? boxW : boxH * sa;
-                lh = sa > ba ? boxW / sa : boxH;
-            }
-            return Rectangle{(float)((W - lw) * 0.5 * (1.0 + t.x)),
-                             (float)((H - lh) * 0.5 * (1.0 + t.y)), (float)lw,
-                             (float)lh};
+            const LayerRect r = trackLayerRect(t, sw, sh, a.proj.width, a.proj.height);
+            return Rectangle{(float)r.x, (float)r.y, (float)r.w, (float)r.h};
         };
 
         auto toScreen = [&](Rectangle c) {
@@ -880,20 +874,13 @@ void previewPane(App &a, Rectangle r)
                     n.height = std::max(8.0f, n.height);
                 }
 
-                /* Back into the numbers the model keeps. The scale is the box
-                 * as a fraction of the canvas; the position is where it sits
-                 * in the space left over, which is what makes -1 mean "hard
-                 * against that edge" whatever size it is. */
-                const double W = a.proj.width, H = a.proj.height;
-                sel->scaleX = n.width / W;
-                sel->scaleY = n.height / H;
-
-                const double freeW = W - n.width, freeH = H - n.height;
-                sel->x = std::fabs(freeW) < 1.0 ? 0.0 : (2.0 * n.x / freeW - 1.0);
-                sel->y = std::fabs(freeH) < 1.0 ? 0.0 : (2.0 * n.y / freeH - 1.0);
-                sel->x = std::max(-4.0, std::min(4.0, sel->x));
-                sel->y = std::max(-4.0, std::min(4.0, sel->y));
-
+                /* Back into the numbers the model keeps, by the function that
+                 * is the inverse of the one that put it there. Doing this
+                 * arithmetic here is what made captions jump when they were
+                 * grabbed - see textMoveTo - and this is the same shape of
+                 * thing. */
+                trackSetLayerRect(sel, LayerRect{n.x, n.y, n.width, n.height},
+                                  a.proj.width, a.proj.height);
                 a.changed(true);
             }
         }

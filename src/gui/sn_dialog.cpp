@@ -761,6 +761,15 @@ bool colour_row(App &a, int id, const char *name, Rgba *c, float x, float y, flo
 std::string g_fontFilter;
 float g_fontScroll = 0;
 
+/* Set when the pointer is over the font list, so the panel behind it leaves
+ * the wheel alone.
+ *
+ * Without it, reaching the end of the fonts handed the rest of the scroll to
+ * the panel and the whole column moved - so looking for a font took the list
+ * you were reading off the screen. A list that has run out should stop, not
+ * pass it on. */
+bool g_fontWheel = false;
+
 } /* namespace */
 
 /* ------------------------------------------------------------------ *
@@ -1284,8 +1293,10 @@ static void inspect_text(App &a, Lane &L)
         DrawRectangleLinesEx(list, 1, SN_BORDER);
 
         const int maxTop = std::max(0, (int)hit.size() - rows);
-        if (CheckCollisionPointRec(GetMousePosition(), list) && !sn_ui_blocked(&a.ui))
+        if (CheckCollisionPointRec(GetMousePosition(), list) && !sn_ui_blocked(&a.ui)) {
             g_fontScroll -= GetMouseWheelMove() * 2.0f;
+            g_fontWheel = true;
+        }
         g_fontScroll = std::max(0.0f, std::min((float)maxTop, g_fontScroll));
 
         const int top = (int)g_fontScroll;
@@ -1394,13 +1405,18 @@ void inspectPane(App &a, Rectangle r)
     Lane L{&a, body.x + 10, body.width - 20, body.y + 8 - a.inspectScroll};
     const float top = L.y;
 
+    g_fontWheel = false;
     if (a.inspectPage == App::INSPECT_TEXT) inspect_text(a, L);
     else inspect_layout(a, L);
 
     EndScissorMode();
 
     const float want = L.y - top + 16;
-    if (CheckCollisionPointRec(GetMousePosition(), body) && !sn_ui_blocked(&ui))
+
+    /* The font list has first claim on the wheel while the pointer is in it,
+     * and keeps it even after it has run out - see g_fontWheel. */
+    if (!g_fontWheel && CheckCollisionPointRec(GetMousePosition(), body) &&
+        !sn_ui_blocked(&ui))
         a.inspectScroll -= GetMouseWheelMove() * 30.0f;
     a.inspectScroll =
         std::max(0.0f, std::min(a.inspectScroll, std::max(0.0f, want - body.height)));

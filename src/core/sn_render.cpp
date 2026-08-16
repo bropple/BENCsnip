@@ -68,26 +68,6 @@ Source *Renderer::source(int itemId, int channel)
  * Video
  * ------------------------------------------------------------------ */
 
-/* Largest w x h box with the source's aspect that fits inside the frame. */
-static void fit(int sw, int sh, int fw, int fh, int *ow, int *oh, int *ox, int *oy)
-{
-    if (sw <= 0 || sh <= 0) { *ow = fw; *oh = fh; *ox = *oy = 0; return; }
-
-    double sa = (double)sw / sh, fa = (double)fw / fh;
-    if (sa > fa) { *ow = fw; *oh = (int)std::lround(fw / sa); }
-    else         { *oh = fh; *ow = (int)std::lround(fh * sa); }
-
-    /* Odd sizes are legal here - this is a preview buffer, not an encoder
-     * input - but an off-by-one that leaves a one-pixel seam at the bottom is
-     * not, so clamp. */
-    if (*ow > fw) *ow = fw;
-    if (*oh > fh) *oh = fh;
-    if (*ow < 1) *ow = 1;
-    if (*oh < 1) *oh = 1;
-    *ox = (fw - *ow) / 2;
-    *oy = (fh - *oh) / 2;
-}
-
 bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
 {
     if (w <= 0 || h <= 0) return false;
@@ -165,40 +145,25 @@ bool Renderer::videoAt(double t, int w, int h, VideoFrame *out)
 
         /* --- where this layer goes ---
          *
-         * The crop is taken first, because it changes the shape that gets
-         * fitted: a 16:9 source cropped to its middle third is a 16:3 layer,
-         * and fitting the uncropped aspect and then cutting would leave it
-         * the wrong size and off centre. */
-        const double keepX = std::max(0.02, 1.0 - tr.cropL - tr.cropR);
-        const double keepY = std::max(0.02, 1.0 - tr.cropT - tr.cropB);
+         * trackLayerRect decides, here and in the preview both, so what you
+         * drag is what gets written. It used to be worked out twice, once
+         * each side, and the two already disagreed by up to a pixel because
+         * this one rounded to integers on the way through and the other did
+         * not. */
+        const LayerRect lr =
+            trackLayerRect(tr, b->info.dispW(), b->info.dispH(), w, h);
 
-        const int srcW = std::max(1, (int)std::lround(b->info.dispW() * keepX));
-        const int srcH = std::max(1, (int)std::lround(b->info.dispH() * keepY));
-
-        /* The box this track's picture goes in, and then the picture in it:
-         * fitted and letterboxed, or stretched to fill, depending on whether
-         * the aspect is locked. */
-        const int boxW = std::max(1, (int)std::lround(w * std::max(0.01, tr.scaleX)));
-        const int boxH = std::max(1, (int)std::lround(h * std::max(0.01, tr.scaleY)));
-
-        int fw, fh, ox, oy;
-        if (tr.stretch) {
-            fw = boxW;
-            fh = boxH;
-        } else {
-            fit(srcW, srcH, boxW, boxH, &fw, &fh, &ox, &oy);
-        }
-
-        /* fit centred it inside the scaled box; what matters is where it sits
-         * on the canvas, which is the free space split by x and y. -1 is hard
-         * against the left or top, +1 against the right or bottom. */
-        ox = (int)std::lround((w - fw) * 0.5 * (1.0 + tr.x));
-        oy = (int)std::lround((h - fh) * 0.5 * (1.0 + tr.y));
+        const int fw = std::max(1, (int)std::lround(lr.w));
+        const int fh = std::max(1, (int)std::lround(lr.h));
+        const int ox = (int)std::lround(lr.x);
+        const int oy = (int)std::lround(lr.y);
 
         /* The decoder is asked for whatever size makes the *kept* part come
          * out at fw x fh, and the crop is then a sub-rectangle of it. Scaling
          * the whole frame and cutting afterwards is the same picture for one
          * extra copy, and this way swscale does the work. */
+        const double keepX = std::max(0.02, 1.0 - tr.cropL - tr.cropR);
+        const double keepY = std::max(0.02, 1.0 - tr.cropT - tr.cropB);
         const int fullW = std::max(1, (int)std::lround(fw / keepX));
         const int fullH = std::max(1, (int)std::lround(fh / keepY));
 

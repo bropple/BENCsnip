@@ -69,6 +69,55 @@ void Track::resetTransform()
     cropL = cropR = cropT = cropB = 0.0;
 }
 
+LayerRect trackLayerRect(const Track &t, double srcW, double srcH, double canvasW,
+                         double canvasH)
+{
+    /* The crop first, because it changes the shape that gets fitted. */
+    const double keepX = std::max(0.02, 1.0 - t.cropL - t.cropR);
+    const double keepY = std::max(0.02, 1.0 - t.cropT - t.cropB);
+
+    const double sw = std::max(1.0, srcW * keepX);
+    const double sh = std::max(1.0, srcH * keepY);
+
+    /* The box the picture goes in, and then the picture in it: fitted and
+     * letterboxed, or stretched to fill, depending on the aspect lock. */
+    const double boxW = std::max(1.0, canvasW * std::max(0.01, t.scaleX));
+    const double boxH = std::max(1.0, canvasH * std::max(0.01, t.scaleY));
+
+    LayerRect r;
+    if (t.stretch) {
+        r.w = boxW;
+        r.h = boxH;
+    } else {
+        const double sa = sw / sh, ba = boxW / boxH;
+        r.w = sa > ba ? boxW : boxH * sa;
+        r.h = sa > ba ? boxW / sa : boxH;
+    }
+
+    /* Where it sits is the space left over, split by x and y: -1 is hard
+     * against the left or top, +1 against the right or bottom. */
+    r.x = (canvasW - r.w) * 0.5 * (1.0 + t.x);
+    r.y = (canvasH - r.h) * 0.5 * (1.0 + t.y);
+    return r;
+}
+
+void trackSetLayerRect(Track *t, const LayerRect &r, double canvasW, double canvasH)
+{
+    if (!t || canvasW < 1.0 || canvasH < 1.0) return;
+
+    t->scaleX = std::max(0.01, r.w / canvasW);
+    t->scaleY = std::max(0.01, r.h / canvasH);
+
+    /* A picture as big as the canvas has no space left over to be a fraction
+     * of, so there is no position that means anything and it is centred. */
+    const double freeW = canvasW - r.w, freeH = canvasH - r.h;
+    t->x = std::fabs(freeW) < 1.0 ? 0.0 : 2.0 * r.x / freeW - 1.0;
+    t->y = std::fabs(freeH) < 1.0 ? 0.0 : 2.0 * r.y / freeH - 1.0;
+
+    t->x = std::max(-4.0, std::min(4.0, t->x));
+    t->y = std::max(-4.0, std::min(4.0, t->y));
+}
+
 const BinItem *Project::item(int id) const
 {
     for (const BinItem &b : bin)

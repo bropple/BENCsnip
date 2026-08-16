@@ -63,6 +63,12 @@ link id move, trim and delete as one, and selecting one selects both. A split
 gives the two halves new link ids of their own, because after a cut they are
 separate clips and dragging one should not drag the other.
 
+Where a picture lands on the canvas — and how to put it somewhere — is
+`trackLayerRect` and `trackSetLayerRect`, one pair, called by the renderer and
+by the preview both. Captions have `textBox` and `textMoveTo` for the same
+reason and learned it the hard way: the preview used to invert the placement by
+hand, the placement changed, and a caption jumped the moment it was grabbed.
+
 A video track also carries where its picture goes: `scale`, `x`, `y` and four
 crop fractions, all relative to the canvas rather than in pixels, so changing
 the project's size moves nothing. It is per track rather than per clip because

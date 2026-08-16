@@ -664,6 +664,24 @@ std::string face_name(const stbtt_fontinfo *info)
     return std::string();
 }
 
+/* Whether this face can set the words this program can type.
+ *
+ * A caption here is ASCII - the text field refuses anything above 126 - so a
+ * font with no Latin letters in it cannot produce anything but rows of
+ * .notdef boxes. macOS ships a lot of those: symbol faces, dingbats, and
+ * private-use fonts whose glyphs live outside Unicode entirely, and they fill
+ * the list with names that pick nothing.
+ *
+ * Three characters rather than one: a face can carry a stray 'A' and nothing
+ * else, and a face with A, a and 0 has an alphabet. */
+bool has_letters(const stbtt_fontinfo *info)
+{
+    static const int probe[] = {'A', 'a', '0'};
+    for (int cp : probe)
+        if (stbtt_FindGlyphIndex(info, cp) == 0) return false;
+    return true;
+}
+
 bool ends_with_font_ext(const std::string &n)
 {
     if (n.size() < 5) return false;
@@ -699,6 +717,15 @@ void add_file(const std::string &path, std::vector<FontEntry> *out)
         e.path = path;
         e.index = i;
         if (e.name.empty()) continue;
+
+        /* A leading dot is Apple's mark for a font the system uses and a
+         * person is not meant to pick - .SF NS, .Al Bayan PUA and the rest.
+         * They are in the same directories as everything else and there is
+         * nothing else about them that says so. */
+        if (e.name[0] == '.') continue;
+
+        if (!has_letters(&info)) continue;
+
         out->push_back(e);
     }
 }

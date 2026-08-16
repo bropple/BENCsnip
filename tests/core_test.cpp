@@ -327,6 +327,94 @@ static void test_fx()
     CHECK(gone, "and one inside it does not");
 }
 
+/* ------------------------------------------------------------------ *
+ * A video layer's place on the canvas
+ *
+ * The same check the captions get, for the same reason: the renderer and the
+ * preview both ask trackLayerRect where a picture goes, and the preview asks
+ * trackSetLayerRect to put it somewhere. If those two stop being each other's
+ * opposite, a layer jumps when it is grabbed - which is exactly what happened
+ * to captions when the pair was written out twice.
+ * ------------------------------------------------------------------ */
+
+static void test_layer()
+{
+    printf("where a picture goes\n");
+
+    const double W = 1920, H = 1080;
+
+    struct Case { double scaleX, scaleY, x, y, cl, cr, ct, cb; bool stretch; };
+    const Case cases[] = {
+        {1.0, 1.0, 0.0, 0.0, 0, 0, 0, 0, false},
+        {0.5, 0.5, -1.0, 0.0, 0, 0, 0, 0, false},
+        {0.5, 0.5, 1.0, -1.0, 0, 0, 0, 0, false},
+        {0.32, 0.32, 0.4, -0.7, 0.1, 0.2, 0.05, 0.15, false},
+        {0.8, 0.4, 0.0, 0.5, 0, 0, 0, 0, true},
+        {1.5, 1.5, 0.2, 0.2, 0, 0, 0, 0, false},
+    };
+
+    for (const Case &c : cases) {
+        sn::Track t;
+        t.scaleX = c.scaleX;
+        t.scaleY = c.scaleY;
+        t.x = c.x;
+        t.y = c.y;
+        t.cropL = c.cl; t.cropR = c.cr; t.cropT = c.ct; t.cropB = c.cb;
+        t.stretch = c.stretch;
+
+        const sn::LayerRect r = sn::trackLayerRect(t, 1280, 720, W, H);
+        CHECK(r.w > 0 && r.h > 0, "a picture has a size, got %fx%f", r.w, r.h);
+
+        /* Put it back where it already is: nothing moves. */
+        sn::Track same = t;
+        sn::trackSetLayerRect(&same, r, W, H);
+        const sn::LayerRect r2 = sn::trackLayerRect(same, 1280, 720, W, H);
+        CHECK(NEAR(r2.x, r.x, 0.51) && NEAR(r2.y, r.y, 0.51) &&
+                  NEAR(r2.w, r.w, 0.51) && NEAR(r2.h, r.h, 0.51),
+              "it does not jump when grabbed: %+.2f,%+.2f %+.2f,%+.2f",
+              r2.x - r.x, r2.y - r.y, r2.w - r.w, r2.h - r.h);
+
+        /* And a drag lands where the drag went - where there is anywhere to
+         * go. A layer that exactly fills the canvas has no space left over,
+         * and `x` is a fraction of the space left over, so every value of it
+         * means the same place: such a layer cannot be moved and this says so
+         * rather than pretending otherwise. */
+        const bool roomX = std::fabs(W - r.w) >= 1.0;
+        const bool roomY = std::fabs(H - r.h) >= 1.0;
+
+        sn::Track moved = t;
+        sn::LayerRect want = r;
+        want.x += 100;
+        want.y += 40;
+        sn::trackSetLayerRect(&moved, want, W, H);
+        const sn::LayerRect r3 = sn::trackLayerRect(moved, 1280, 720, W, H);
+
+        if (roomX)
+            CHECK(NEAR(r3.x - r.x, 100.0, 0.51), "moves sideways by what it was "
+                                                 "dragged, got %+.1f", r3.x - r.x);
+        else
+            CHECK(NEAR(r3.x, r.x, 0.51), "a layer with no room stays put sideways");
+
+        if (roomY)
+            CHECK(NEAR(r3.y - r.y, 40.0, 0.51), "and downwards, got %+.1f",
+                  r3.y - r.y);
+        else
+            CHECK(NEAR(r3.y, r.y, 0.51), "and stays put downwards");
+    }
+
+    /* A picture as wide as the canvas has no free space to be a fraction of,
+     * and is centred rather than sent to an edge by a division by nothing. */
+    {
+        sn::Track full;
+        const sn::LayerRect r = sn::trackLayerRect(full, 1920, 1080, W, H);
+        CHECK(NEAR(r.w, W, 0.51) && NEAR(r.x, 0.0, 0.51),
+              "a full-canvas layer fills it, got %f wide at %f", r.w, r.x);
+        sn::trackSetLayerRect(&full, r, W, H);
+        CHECK(std::isfinite(full.x) && std::isfinite(full.y),
+              "and placing it back is a real number");
+    }
+}
+
 static void test_media()
 {
     printf("media\n");
@@ -1732,6 +1820,7 @@ int main()
     test_text();
     test_loop();
     test_fx();
+    test_layer();
     test_junk();
 
     if (have(V1) && have(V2) && have(A1)) {
